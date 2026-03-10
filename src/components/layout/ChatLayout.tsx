@@ -2,12 +2,11 @@ import { useEffect, useState } from "react";
 import { useMatrix } from "../../app/providers/useMatrix";
 import { useMatrixRooms } from "../../hooks/useMatrixRooms";
 import { useMatrixTimeline } from "../../hooks/useMatrixTimeline";
-import { useMatrixSend } from "../../hooks/useMatrixSend";
 import { useMatrixDirectRoom } from "../../hooks/useMatrixDirectRoom";
 import { useMatrixRoomStatus } from "../../hooks/useMatrixRoomStatus";
 import { RoomList } from "../chat/RoomList";
 import { ChatWindow } from "../chat/ChatWindow";
-import { MessageInput } from "../chat/MessageInput";
+import { MessageComposer } from "../chat/MessageComposer";
 import { EmptyConversation } from "../chat/EmptyConversation";
 
 export function ChatLayout() {
@@ -20,7 +19,6 @@ export function ChatLayout() {
   const [creatingDirect, setCreatingDirect] = useState(false);
   const { messages } = useMatrixTimeline(selectedRoomId);
   const { typingText, presenceText, online } = useMatrixRoomStatus(selectedRoomId);
-  const { sendText } = useMatrixSend();
   const { createOrGetDirectRoom } = useMatrixDirectRoom();
   const selectedRoom = rooms.find((room) => room.roomId === selectedRoomId) ?? null;
 
@@ -141,12 +139,10 @@ export function ChatLayout() {
                   </button>
                 </div>
               </div>
-              <ChatWindow messages={messages} myUserId={auth.userId} />
-              <MessageInput
-                key={selectedRoomId}
+              <ChatWindow roomId={selectedRoomId} messages={messages} myUserId={auth.userId} />
+              <MessageComposer
                 roomId={selectedRoomId}
                 disabled={!selectedRoomId}
-                onSend={(text) => void sendText(selectedRoomId, text)}
               />
             </>
           )}
