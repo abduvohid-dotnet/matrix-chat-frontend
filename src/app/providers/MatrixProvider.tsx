@@ -1,0 +1,169 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  ClientEvent,
+  type MatrixClient,
+} from "matrix-js-sdk";
+import { createAuthedMatrixClient, createTempMatrixClient } from "../../services/matrixClient";
+import { clearAuth, readAuth, writeAuth, type StoredAuth } from "../../services/storage";
+import { MatrixContext, type MatrixContextValue } from "./matrix-context";
+
+function toLocalpart(input: string): string {
+  if (input.startsWith("@")) return input.slice(1).split(":")[0];
+  return input;
+}
+
+function normalizeLoginUser(input: string): string {
+  return toLocalpart(input.trim());
+}
+
+type MatrixLikeError = {
+  message?: string;
+  httpStatus?: number;
+  data?: {
+    errcode?: string;
+    error?: string;
+  };
+};
+
+function toErrorMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    const e = error as MatrixLikeError;
+    const status = typeof e.httpStatus === "number" ? `HTTP ${e.httpStatus}` : "";
+    const serverCode = e.data?.errcode ?? "";
+    const serverMessage = e.data?.error ?? e.message ?? "";
+    const merged = [status, serverCode, serverMessage].filter(Boolean).join(" - ");
+    if (merged) return merged;
+  }
+  if (error instanceof Error) return error.message;
+  return "Login failed";
+}
+
+export function MatrixProvider({ children }: { children: ReactNode }) {
+  const [auth, setAuth] = useState<StoredAuth | null>(() => readAuth());
+  const [status, setStatus] = useState<MatrixContextValue["status"]>(() => (readAuth() ? "connected" : "disconnected"));
+  const [error, setError] = useState<string | null>(null);
+
+  const clientRef = useRef<MatrixClient | null>(null);
+  const client = useMemo<MatrixClient | null>(() => {
+    if (!auth) return null;
+    return createAuthedMatrixClient({ accessToken: auth.accessToken, userId: auth.userId });
+  }, [auth]);
+
+  useEffect(() => {
+    if (!client) {
+      clientRef.current = null;
+      return;
+    }
+
+    clientRef.current = client;
+    client.startClient({ initialSyncLimit: 20 });
+
+    return () => {
+      client.stopClient();
+      if (clientRef.current === client) {
+        clientRef.current = null;
+      }
+    };
+  }, [client]);
+
+  useEffect(() => {
+    if (!client) return;
+
+    const joinInvites = async () => {
+      const invitedRooms = client.getRooms().filter((room) => room.getMyMembership() === "invite");
+      for (const room of invitedRooms) {
+        try {
+          await client.joinRoom(room.roomId);
+        } catch {
+          // ignore failed auto-joins
+        }
+      }
+    };
+
+    const onRoomUpdate = () => {
+      void joinInvites();
+    };
+
+    const onSync = (state: string) => {
+      if (state === "PREPARED" || state === "SYNCING") {
+        void joinInvites();
+      }
+    };
+
+    void joinInvites();
+    client.on(ClientEvent.Room, onRoomUpdate);
+    client.on(ClientEvent.Sync, onSync);
+
+    return () => {
+      client.off(ClientEvent.Room, onRoomUpdate);
+      client.off(ClientEvent.Sync, onSync);
+    };
+  }, [client]);
+
+  const login = useCallback(async (userIdOrLocalpart: string, password: string) => {
+    setStatus("connecting");
+    setError(null);
+
+    const temp = createTempMatrixClient();
+
+    try {
+      const loginUser = normalizeLoginUser(userIdOrLocalpart);
+      const res = await temp.login("m.login.password", {
+        identifier: {
+          type: "m.id.user",
+          user: loginUser,
+        },
+        user: loginUser,
+        password,
+      });
+
+      const next: StoredAuth = {
+        accessToken: res.access_token,
+        userId: res.user_id,
+        deviceId: res.device_id,
+      };
+
+      writeAuth(next);
+      setAuth(next);
+      setStatus("connected");
+    } catch (e: unknown) {
+      setStatus("disconnected");
+      setError(toErrorMessage(e));
+      throw e;
+    }
+  }, []);
+
+  const logout = useCallback(async () => {
+    setError(null);
+    setStatus("disconnected");
+    const activeClient = clientRef.current;
+    clearAuth();
+    setAuth(null);
+
+    if (activeClient) {
+      try {
+        await activeClient.logout();
+      } catch {
+        // ignore
+      }
+      activeClient.stopClient();
+      if (clientRef.current === activeClient) {
+        clientRef.current = null;
+      }
+    }
+  }, []);
+
+  const value = useMemo<MatrixContextValue>(
+    () => ({
+      client,
+      auth,
+      status,
+      error,
+      login,
+      logout,
+    }),
+    [client, auth, status, error, login, logout],
+  );
+
+  return <MatrixContext.Provider value={value}>{children}</MatrixContext.Provider>;
+}
