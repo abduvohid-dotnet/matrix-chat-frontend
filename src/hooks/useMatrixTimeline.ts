@@ -1,10 +1,11 @@
 import { useEffect, useReducer } from "react";
-import { RoomEvent, type MatrixEvent, type Room } from "matrix-js-sdk";
+import { EventType, RoomEvent, type MatrixEvent, type Room } from "matrix-js-sdk";
 import { useMatrix } from "../app/providers/useMatrix";
 
 export type UiMessage = {
   id: string;
   eventId: string | null;
+  canRedact: boolean;
   sender: string;
   text: string;
   ts: number;
@@ -79,8 +80,18 @@ function inferMimeFromName(name: string): string | null {
 }
 
 function isEventRedacted(event: MatrixEvent): boolean {
+  if (event.isRedacted()) return true;
   const unsigned = event.getUnsigned() as { redacted_because?: unknown } | undefined;
   return Boolean(unsigned?.redacted_because);
+}
+
+function hasLocalRedaction(event: MatrixEvent): boolean {
+  return Boolean(event.localRedactionEvent());
+}
+
+function getRedactedEventId(event: MatrixEvent): string | null {
+  const raw = event as MatrixEvent & { event?: { redacts?: unknown } };
+  return asString(raw.event?.redacts);
 }
 
 export function useMatrixTimeline(roomId: string | null) {
@@ -95,9 +106,16 @@ export function useMatrixTimeline(roomId: string | null) {
       bumpTimelineVersion();
     };
 
+    const onLocalEchoUpdated = (_event: MatrixEvent, updatedRoom: Room) => {
+      if (updatedRoom.roomId !== roomId) return;
+      bumpTimelineVersion();
+    };
+
     client.on(RoomEvent.Timeline, onTimeline);
+    client.on(RoomEvent.LocalEchoUpdated, onLocalEchoUpdated);
     return () => {
       client.off(RoomEvent.Timeline, onTimeline);
+      client.off(RoomEvent.LocalEchoUpdated, onLocalEchoUpdated);
     };
   }, [client, roomId]);
 
@@ -111,11 +129,36 @@ export function useMatrixTimeline(roomId: string | null) {
 
   const replacements = new Map<string, Replacement>();
   const reactionsByEvent = new Map<string, Map<string, UiReaction>>();
+  const redactedTargetIds = new Set<string>();
 
   events.forEach((event) => {
-    if (isEventRedacted(event)) return;
+    if (event.getType() === EventType.RoomMessage && hasLocalRedaction(event)) {
+      const redactedEventId = event.getId();
+      if (redactedEventId) {
+        redactedTargetIds.add(redactedEventId);
+      }
+      return;
+    }
 
-    if (event.getType() === "m.room.message") {
+    if (isEventRedacted(event)) {
+      if (event.getType() === EventType.RoomMessage) {
+        const redactedEventId = event.getId();
+        if (redactedEventId) {
+          redactedTargetIds.add(redactedEventId);
+        }
+      }
+      return;
+    }
+
+    if (event.getType() === EventType.RoomRedaction) {
+      const targetEventId = getRedactedEventId(event);
+      if (targetEventId) {
+        redactedTargetIds.add(targetEventId);
+      }
+      return;
+    }
+
+    if (event.getType() === EventType.RoomMessage) {
       const content = event.getContent() as RoomMessageContent;
       const relation = content["m.relates_to"];
       if (relation?.rel_type !== "m.replace") return;
@@ -135,7 +178,7 @@ export function useMatrixTimeline(roomId: string | null) {
       return;
     }
 
-    if (event.getType() !== "m.reaction") return;
+    if (event.getType() !== EventType.Reaction) return;
     const content = event.getContent() as ReactionContent;
     const relation = content["m.relates_to"];
 
@@ -165,7 +208,11 @@ export function useMatrixTimeline(roomId: string | null) {
 
   const messages: UiMessage[] = events
     .filter((event) => {
-      if (event.getType() !== "m.room.message") return false;
+      if (event.getType() !== EventType.RoomMessage) return false;
+      if (hasLocalRedaction(event)) return false;
+      if (isEventRedacted(event)) return false;
+      const eventId = event.getId();
+      if (eventId && redactedTargetIds.has(eventId)) return false;
       const content = event.getContent() as RoomMessageContent;
       const relation = content["m.relates_to"];
       return relation?.rel_type !== "m.replace";
@@ -174,14 +221,13 @@ export function useMatrixTimeline(roomId: string | null) {
       const content = event.getContent() as RoomMessageContent;
       const eventId = event.getId();
       const replacement = eventId ? replacements.get(eventId) : undefined;
-      const deleted = isEventRedacted(event);
 
       const rawMsgType = asString(content.msgtype) ?? "m.text";
       const baseBody = asString(content.body) ?? "";
 
       const msgtype = replacement?.msgtype ?? rawMsgType;
-      const body = deleted ? "Message deleted" : replacement?.body ?? baseBody;
-      const url = deleted ? null : asString(content.url) ?? asString(content.file?.url);
+      const body = replacement?.body ?? baseBody;
+      const url = asString(content.url) ?? asString(content.file?.url);
 
       const info = (content.info ?? undefined) as MessageInfo | undefined;
       const mediaMime = info ? asString(info.mimetype) : null;
@@ -192,11 +238,12 @@ export function useMatrixTimeline(roomId: string | null) {
       return {
         id: eventId ?? `${event.getTs()}-${event.getSender()}`,
         eventId: eventId ?? null,
+        canRedact: Boolean(eventId),
         sender: event.getSender() ?? "unknown",
         text: body,
         ts: event.getTs(),
-        edited: Boolean(replacement) && !deleted,
-        deleted,
+        edited: Boolean(replacement),
+        deleted: false,
         msgtype,
         mediaUrl: url,
         mediaMime: inferredMime,

@@ -368,6 +368,18 @@ body {
   color: var(--muted);
 }
 
+.chat-delete-error {
+  align-self: center;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #9f1239;
+  background: #fff1f5;
+  border: 1px solid #f4c8d4;
+  border-radius: 10px;
+}
+
 .msg {
   padding: 10px 12px;
   border-radius: 14px;
@@ -589,6 +601,7 @@ body {
   border-radius: 999px;
   padding: 4px 8px;
   max-width: min(100%, 360px);
+  position: relative;
 }
 
 .composer-file-name {
@@ -608,6 +621,36 @@ body {
   cursor: pointer;
   padding: 0;
   line-height: 1;
+}
+
+.composer-file-progress-text {
+  font-size: 11px;
+  font-weight: 700;
+  color: #0b5a54;
+}
+
+.composer-file-progress {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 999px;
+  background: #d9e8ef;
+  overflow: hidden;
+}
+
+.composer-file-progress-fill {
+  display: block;
+  height: 100%;
+  background: #0f766e;
+}
+
+.composer-uploading-status {
+  font-size: 12px;
+  color: #0b5a54;
+  font-weight: 700;
+  padding: 2px 10px 0;
 }
 
 .composer-file-input {

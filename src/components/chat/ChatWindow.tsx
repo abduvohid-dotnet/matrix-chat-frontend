@@ -58,6 +58,8 @@ export function ChatWindow({
   const [editingText, setEditingText] = useState("");
   const [loadingMessageId, setLoadingMessageId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [optimisticDeletedByRoom, setOptimisticDeletedByRoom] = useState<Record<string, Set<string>>>({});
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -106,11 +108,55 @@ export function ChatWindow({
     }
   }, [contextMenu, messages]);
 
+  useEffect(() => {
+    const activeEventIds = new Set(
+      messages
+        .map((message) => message.eventId)
+        .filter((eventId): eventId is string => typeof eventId === "string" && eventId.length > 0),
+    );
+
+    setOptimisticDeletedByRoom((prev) => {
+      const currentRoomSet = prev[roomId];
+      if (!currentRoomSet || currentRoomSet.size === 0) return prev;
+
+      const nextRoomSet = new Set<string>();
+      currentRoomSet.forEach((eventId) => {
+        if (activeEventIds.has(eventId)) {
+          nextRoomSet.add(eventId);
+        }
+      });
+
+      if (nextRoomSet.size === currentRoomSet.size) return prev;
+      if (nextRoomSet.size === 0) {
+        const { [roomId]: _removed, ...rest } = prev;
+        return rest;
+      }
+
+      return {
+        ...prev,
+        [roomId]: nextRoomSet,
+      };
+    });
+  }, [messages, roomId]);
+
+  const optimisticDeletedIds = useMemo(
+    () => optimisticDeletedByRoom[roomId] ?? new Set<string>(),
+    [optimisticDeletedByRoom, roomId],
+  );
+
+  const visibleMessages = useMemo(
+    () =>
+      messages.filter(
+        (message) => !(message.eventId && optimisticDeletedIds.has(message.eventId)),
+      ),
+    [messages, optimisticDeletedIds],
+  );
+
   const mediaHttpByMessageId = useMemo(() => {
     const map = new Map<string, string>();
     if (!client) return map;
 
-    messages.forEach((message) => {
+    visibleMessages.forEach((message) => {
       if (!message.mediaUrl) return;
 
       const authUrl =
@@ -131,7 +177,7 @@ export function ChatWindow({
     });
 
     return map;
-  }, [auth?.accessToken, client, messages]);
+  }, [auth?.accessToken, client, visibleMessages]);
 
   const startEdit = (message: UiMessage) => {
     setContextMenu(null);
@@ -155,11 +201,46 @@ export function ChatWindow({
   };
 
   const onDelete = async (message: UiMessage) => {
-    if (!message.eventId) return;
+    if (!message.canRedact) {
+      setDeleteError("Message hali sync bo'lmagan. 1-2 soniya kutib qayta urinib ko'ring.");
+      return;
+    }
+
+    const eventId = message.eventId;
+    if (!eventId) return;
     setContextMenu(null);
+    setDeleteError(null);
     setLoadingMessageId(message.id);
+    setOptimisticDeletedByRoom((prev) => {
+      const current = prev[roomId] ?? new Set<string>();
+      const next = new Set(current);
+      next.add(eventId);
+      return {
+        ...prev,
+        [roomId]: next,
+      };
+    });
     try {
-      await deleteMessage(roomId, message.eventId, "Deleted by user");
+      await deleteMessage(roomId, eventId, "Deleted by user");
+    } catch (error: unknown) {
+      setOptimisticDeletedByRoom((prev) => {
+        const current = prev[roomId];
+        if (!current || current.size === 0) return prev;
+
+        const next = new Set(current);
+        next.delete(eventId);
+        if (next.size === 0) {
+          const { [roomId]: _removed, ...rest } = prev;
+          return rest;
+        }
+
+        return {
+          ...prev,
+          [roomId]: next,
+        };
+      });
+      const messageText = error instanceof Error ? error.message : "Delete failed";
+      setDeleteError(messageText);
     } finally {
       setLoadingMessageId(null);
     }
@@ -172,7 +253,7 @@ export function ChatWindow({
   };
 
   const contextMenuMessage = contextMenu
-    ? messages.find((message) => message.id === contextMenu.messageId) ?? null
+    ? visibleMessages.find((message) => message.id === contextMenu.messageId) ?? null
     : null;
 
   const menuPosition = useMemo(() => {
@@ -192,10 +273,11 @@ export function ChatWindow({
 
   return (
     <div ref={containerRef} className="chat-window">
-      {!messages.length ? (
+      {deleteError && <div className="chat-delete-error">{deleteError}</div>}
+      {!visibleMessages.length ? (
         <div className="chat-empty">No messages yet. Send first message.</div>
       ) : (
-        messages.map((m) => (
+        visibleMessages.map((m) => (
           (() => {
             const kind = getRenderableKind(m);
             const mediaUrl = mediaHttpByMessageId.get(m.id);
@@ -339,9 +421,9 @@ export function ChatWindow({
                 type="button"
                 className="msg-context-item danger"
                 onClick={() => void onDelete(contextMenuMessage)}
-                disabled={loadingMessageId === contextMenuMessage.id}
+                disabled={loadingMessageId === contextMenuMessage.id || !contextMenuMessage.canRedact}
               >
-                Delete
+                {contextMenuMessage.canRedact ? "Delete" : "Syncing..."}
               </button>
             </div>
           )}

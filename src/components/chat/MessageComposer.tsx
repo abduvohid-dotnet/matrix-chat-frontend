@@ -1,9 +1,33 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useRef, useState } from "react";
 import { useMatrix } from "../../app/providers/useMatrix";
 import { useMatrixSend } from "../../hooks/useMatrixSend";
 import { useMatrixUpload } from "../../hooks/useMatrixUpload";
+import { Paperclip } from "lucide-react";
 
-const QUICK_EMOJIS = ["😀", "😂", "😍", "👍", "🔥", "🎉"];
+const QUICK_EMOJIS = ["\u{1F600}", "\u{1F602}", "\u{1F60D}", "\u{1F44D}", "\u{1F525}", "\u{1F389}"];
+
+type QueuedUpload = {
+  id: string;
+  file: File;
+};
+
+type UploadProgress = {
+  loaded: number;
+  total: number;
+};
+
+function createUploadId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function toPercent(progress: UploadProgress): number {
+  if (!progress.total || progress.total <= 0) return 0;
+  const raw = Math.round((progress.loaded / progress.total) * 100);
+  return Math.min(100, Math.max(0, raw));
+}
 
 export function MessageComposer({
   roomId,
@@ -17,10 +41,12 @@ export function MessageComposer({
   const { sendFileMessage } = useMatrixUpload();
 
   const [text, setText] = useState("");
-  const [queuedFiles, setQueuedFiles] = useState<File[]>([]);
+  const [queuedFiles, setQueuedFiles] = useState<QueuedUpload[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadProgressById, setUploadProgressById] = useState<Record<string, number>>({});
+  const [uploadingFileId, setUploadingFileId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const typingTimeoutRef = useRef<number | null>(null);
@@ -57,11 +83,20 @@ export function MessageComposer({
 
   const queueSelectedFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    setQueuedFiles((prev) => [...prev, ...Array.from(files)]);
+    const next = Array.from(files).map((file) => ({ id: createUploadId(), file }));
+    setQueuedFiles((prev) => [...prev, ...next]);
   };
 
   const removeQueuedFile = (index: number) => {
+    const removed = queuedFiles[index];
     setQueuedFiles((prev) => prev.filter((_, i) => i !== index));
+
+    if (!removed) return;
+    setUploadProgressById((prev) => {
+      const next = { ...prev };
+      delete next[removed.id];
+      return next;
+    });
   };
 
   const submit = async () => {
@@ -74,13 +109,27 @@ export function MessageComposer({
       if (trimmed) {
         await sendText(roomId, trimmed);
       }
-      for (const file of queuedFiles) {
-        await sendFileMessage(roomId, file);
+
+      for (const queued of queuedFiles) {
+        setUploadingFileId(queued.id);
+        setUploadProgressById((prev) => ({ ...prev, [queued.id]: 0 }));
+
+        await sendFileMessage(roomId, queued.file, (progress) => {
+          const percent = toPercent(progress);
+          setUploadProgressById((prev) => {
+            if (prev[queued.id] === percent) return prev;
+            return { ...prev, [queued.id]: percent };
+          });
+        });
+
+        setUploadProgressById((prev) => ({ ...prev, [queued.id]: 100 }));
       }
 
       setText("");
       setQueuedFiles([]);
       setShowEmoji(false);
+      setUploadProgressById({});
+      setUploadingFileId(null);
       stopTyping();
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -89,6 +138,7 @@ export function MessageComposer({
       setError(e instanceof Error ? e.message : "Message send failed");
     } finally {
       setIsSending(false);
+      setUploadingFileId(null);
     }
   };
 
@@ -116,20 +166,37 @@ export function MessageComposer({
     <div className="composer">
       {queuedFiles.length > 0 && (
         <div className="composer-files">
-          {queuedFiles.map((file, index) => (
-            <div key={`${file.name}-${index}-${file.size}`} className="composer-file">
-              <span className="composer-file-name">{file.name}</span>
-              <button
-                type="button"
-                className="composer-file-remove"
-                onClick={() => removeQueuedFile(index)}
-                aria-label="Remove file"
-                disabled={isSending || disabled}
-              >
-                x
-              </button>
-            </div>
-          ))}
+          {queuedFiles.map((queued, index) => {
+            const progress = uploadProgressById[queued.id] ?? 0;
+            const showProgress = isSending && (uploadingFileId === queued.id || progress > 0);
+
+            return (
+              <div key={queued.id} className="composer-file">
+                <span className="composer-file-name">{queued.file.name}</span>
+                {showProgress && <span className="composer-file-progress-text">{progress}%</span>}
+                <button
+                  type="button"
+                  className="composer-file-remove"
+                  onClick={() => removeQueuedFile(index)}
+                  aria-label="Remove file"
+                  disabled={isSending || disabled}
+                >
+                  x
+                </button>
+                {showProgress && (
+                  <span className="composer-file-progress" aria-hidden>
+                    <span className="composer-file-progress-fill" style={{ width: `${progress}%` }} />
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {isSending && uploadingFileId && (
+        <div className="composer-uploading-status">
+          Uploading... {uploadProgressById[uploadingFileId] ?? 0}%
         </div>
       )}
 
@@ -156,7 +223,7 @@ export function MessageComposer({
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || isSending}
         >
-          Attach
+          <Paperclip />
         </button>
         <input
           ref={fileInputRef}

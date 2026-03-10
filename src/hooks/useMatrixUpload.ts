@@ -4,6 +4,7 @@ import { useMatrix } from "../app/providers/useMatrix";
 
 type UploadResponse = string | { content_uri?: string };
 type MediaMessageType = MsgType.Image | MsgType.Video | MsgType.Audio | MsgType.File;
+type UploadProgress = { loaded: number; total: number };
 
 export type MatrixUploadResult = {
   mxcUrl: string;
@@ -58,12 +59,17 @@ export function useMatrixUpload() {
   const { client } = useMatrix();
 
   const uploadFile = useCallback(
-    async (file: File): Promise<MatrixUploadResult> => {
+    async (file: File, onProgress?: (progress: UploadProgress) => void): Promise<MatrixUploadResult> => {
       if (!client) {
         throw new Error("Matrix client is not connected");
       }
 
-      const res = (await client.uploadContent(file, { type: file.type })) as UploadResponse;
+      const res = (await client.uploadContent(file, {
+        type: file.type,
+        progressHandler: (progress) => {
+          if (onProgress) onProgress(progress);
+        },
+      })) as UploadResponse;
       const mime = file.type || guessMimeFromFileName(file.name);
 
       return {
@@ -78,12 +84,16 @@ export function useMatrixUpload() {
   );
 
   const sendFileMessage = useCallback(
-    async (roomId: string, file: File): Promise<MatrixUploadResult> => {
+    async (
+      roomId: string,
+      file: File,
+      onProgress?: (progress: UploadProgress) => void,
+    ): Promise<MatrixUploadResult> => {
       if (!client) {
         throw new Error("Matrix client is not connected");
       }
 
-      const uploaded = await uploadFile(file);
+      const uploaded = await uploadFile(file, onProgress);
       const info = {
         mimetype: uploaded.mime,
         size: uploaded.size,
