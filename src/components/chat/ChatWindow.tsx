@@ -60,11 +60,13 @@ export function ChatWindow({
   messages,
   myUserId,
   onReply,
+  onForward,
 }: {
   roomId: string;
   messages: UiMessage[];
   myUserId: string;
   onReply: (message: UiMessage) => void;
+  onForward: (message: UiMessage) => void;
 }) {
   const { client, auth } = useMatrix();
   const { editMessage, deleteMessage } = useMatrixMessageActions();
@@ -275,6 +277,11 @@ export function ChatWindow({
     onReply(message);
   };
 
+  const onForwardMessage = (message: UiMessage) => {
+    setContextMenu(null);
+    onForward(message);
+  };
+
   const contextMenuMessage = contextMenu
     ? visibleMessages.find((message) => message.id === contextMenu.messageId) ?? null
     : null;
@@ -328,6 +335,12 @@ export function ChatWindow({
                   {message.edited && <span className="msg-edited">edited</span>}
                 </div>
               </div>
+
+              {message.forwardedFrom && (
+                <div className="msg-forwarded">
+                  Forwarded from {message.forwardedFrom.sender}
+                </div>
+              )}
 
               {message.replyTo && (
                 <div className="msg-reply-preview">
@@ -447,6 +460,13 @@ export function ChatWindow({
                 onClick={() => onReplyMessage(contextMenuMessage)}
               >
                 Reply
+              </button>
+              <button
+                type="button"
+                className="msg-context-item"
+                onClick={() => onForwardMessage(contextMenuMessage)}
+              >
+                Forward
               </button>
               {contextMenuMessage.sender === myUserId && (
                 <button

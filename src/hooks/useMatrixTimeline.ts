@@ -1,6 +1,7 @@
 import { useEffect, useReducer } from "react";
 import { EventType, RoomEvent, type MatrixEvent, type Room } from "matrix-js-sdk";
 import { useMatrix } from "../app/providers/useMatrix";
+import { FORWARDED_FROM_KEY } from "../services/matrixForward";
 import { stripMatrixReplyFallback } from "../services/matrixReply";
 
 export type UiMessage = {
@@ -18,6 +19,7 @@ export type UiMessage = {
   mediaSize: number | null;
   reactions: UiReaction[];
   replyTo: UiReplyPreview | null;
+  forwardedFrom: UiForwardPreview | null;
 };
 
 export type UiReplyPreview = {
@@ -25,6 +27,11 @@ export type UiReplyPreview = {
   sender: string;
   text: string;
   msgtype: string;
+};
+
+export type UiForwardPreview = {
+  sender: string;
+  eventId: string | null;
 };
 
 type RoomMessageContent = {
@@ -46,6 +53,11 @@ type RoomMessageContent = {
     "m.in_reply_to"?: {
       event_id?: unknown;
     };
+  };
+  [FORWARDED_FROM_KEY]?: {
+    sender?: unknown;
+    eventId?: unknown;
+    roomId?: unknown;
   };
 };
 
@@ -248,6 +260,7 @@ export function useMatrixTimeline(roomId: string | null) {
       const inferredMime = mediaMime ?? inferMimeFromName(body);
       const mediaSize = info ? asNumber(info.size) : null;
       const reactionsMap = eventId ? reactionsByEvent.get(eventId) : undefined;
+      const forwardedFrom = content[FORWARDED_FROM_KEY];
 
       return {
         id: eventId ?? `${event.getTs()}-${event.getSender()}`,
@@ -271,6 +284,12 @@ export function useMatrixTimeline(roomId: string | null) {
               sender: "",
               text: "",
               msgtype: "m.text",
+            }
+          : null,
+        forwardedFrom: forwardedFrom
+          ? {
+              sender: asString(forwardedFrom.sender) ?? "Unknown",
+              eventId: asString(forwardedFrom.eventId),
             }
           : null,
       };

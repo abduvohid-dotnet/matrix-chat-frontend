@@ -5,12 +5,14 @@ import { useMatrixTimeline } from "../../hooks/useMatrixTimeline";
 import { useMatrixDirectRoom } from "../../hooks/useMatrixDirectRoom";
 import { useMatrixRoomStatus } from "../../hooks/useMatrixRoomStatus";
 import { useMatrixCall } from "../../hooks/useMatrixCall";
+import { useMatrixForward } from "../../hooks/useMatrixForward";
 import type { UiMessage } from "../../hooks/useMatrixTimeline";
 import { RoomList } from "../chat/RoomList";
 import { ChatWindow } from "../chat/ChatWindow";
 import { MessageComposer } from "../chat/MessageComposer";
 import { EmptyConversation } from "../chat/EmptyConversation";
 import { CallPanel } from "../chat/CallPanel";
+import { ForwardDialog } from "../chat/ForwardDialog";
 import { Phone, Video } from "lucide-react";
 import type { MatrixReplyTarget } from "../../services/matrixReply";
 
@@ -23,9 +25,13 @@ export function ChatLayout() {
   const [directError, setDirectError] = useState<string | null>(null);
   const [creatingDirect, setCreatingDirect] = useState(false);
   const [replyTo, setReplyTo] = useState<MatrixReplyTarget | null>(null);
+  const [forwardMessage, setForwardMessage] = useState<UiMessage | null>(null);
+  const [forwarding, setForwarding] = useState(false);
+  const [forwardError, setForwardError] = useState<string | null>(null);
   const { messages } = useMatrixTimeline(selectedRoomId);
   const { typingText, presenceText, online } = useMatrixRoomStatus(selectedRoomId);
   const { createOrGetDirectRoom } = useMatrixDirectRoom();
+  const { forwardMessage: sendForward } = useMatrixForward();
   const matrixCall = useMatrixCall();
   const selectedRoom = rooms.find((room) => room.roomId === selectedRoomId) ?? null;
 
@@ -56,6 +62,11 @@ export function ChatLayout() {
     setReplyTo(null);
   }, [selectedRoomId]);
 
+  useEffect(() => {
+    setForwardMessage(null);
+    setForwardError(null);
+  }, [selectedRoomId]);
+
   const onReply = (message: UiMessage) => {
     if (!message.eventId) return;
 
@@ -65,6 +76,28 @@ export function ChatLayout() {
       text: message.text,
       msgtype: message.msgtype,
     });
+  };
+
+  const onForward = (message: UiMessage) => {
+    setForwardError(null);
+    setForwardMessage(message);
+  };
+
+  const onSubmitForward = async (targetRoomId: string) => {
+    if (!forwardMessage) return;
+
+    setForwarding(true);
+    setForwardError(null);
+    try {
+      await sendForward(targetRoomId, forwardMessage);
+      setForwardMessage(null);
+      setSelectedRoomId(targetRoomId);
+      setAutoSelectEnabled(false);
+    } catch (error: unknown) {
+      setForwardError(error instanceof Error ? error.message : "Forward failed");
+    } finally {
+      setForwarding(false);
+    }
   };
 
   const onStartDirect = async () => {
@@ -210,6 +243,7 @@ export function ChatLayout() {
                 messages={messages}
                 myUserId={auth.userId}
                 onReply={onReply}
+                onForward={onForward}
               />
               <MessageComposer
                 roomId={selectedRoomId}
@@ -221,6 +255,20 @@ export function ChatLayout() {
           )}
         </div>
       </div>
+      <ForwardDialog
+        open={Boolean(forwardMessage)}
+        rooms={rooms}
+        sourceMessage={forwardMessage}
+        currentRoomId={selectedRoomId}
+        busy={forwarding}
+        error={forwardError}
+        onClose={() => {
+          if (forwarding) return;
+          setForwardMessage(null);
+          setForwardError(null);
+        }}
+        onForward={(roomId) => void onSubmitForward(roomId)}
+      />
     </div>
   );
 }
