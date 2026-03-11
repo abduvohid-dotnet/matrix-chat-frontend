@@ -1,6 +1,7 @@
 import { useEffect, useReducer } from "react";
 import { EventType, RoomEvent, type MatrixEvent, type Room } from "matrix-js-sdk";
 import { useMatrix } from "../app/providers/useMatrix";
+import { stripMatrixReplyFallback } from "../services/matrixReply";
 
 export type UiMessage = {
   id: string;
@@ -16,6 +17,14 @@ export type UiMessage = {
   mediaMime: string | null;
   mediaSize: number | null;
   reactions: UiReaction[];
+  replyTo: UiReplyPreview | null;
+};
+
+export type UiReplyPreview = {
+  eventId: string;
+  sender: string;
+  text: string;
+  msgtype: string;
 };
 
 type RoomMessageContent = {
@@ -34,6 +43,9 @@ type RoomMessageContent = {
     rel_type?: unknown;
     event_id?: unknown;
     key?: unknown;
+    "m.in_reply_to"?: {
+      event_id?: unknown;
+    };
   };
 };
 
@@ -221,13 +233,15 @@ export function useMatrixTimeline(roomId: string | null) {
       const content = event.getContent() as RoomMessageContent;
       const eventId = event.getId();
       const replacement = eventId ? replacements.get(eventId) : undefined;
+      const relation = content["m.relates_to"];
 
       const rawMsgType = asString(content.msgtype) ?? "m.text";
-      const baseBody = asString(content.body) ?? "";
+      const baseBody = stripMatrixReplyFallback(asString(content.body) ?? "");
 
       const msgtype = replacement?.msgtype ?? rawMsgType;
-      const body = replacement?.body ?? baseBody;
+      const body = stripMatrixReplyFallback(replacement?.body ?? baseBody);
       const url = asString(content.url) ?? asString(content.file?.url);
+      const replyToEventId = asString(relation?.["m.in_reply_to"]?.event_id);
 
       const info = (content.info ?? undefined) as MessageInfo | undefined;
       const mediaMime = info ? asString(info.mimetype) : null;
@@ -251,8 +265,38 @@ export function useMatrixTimeline(roomId: string | null) {
         reactions: reactionsMap
           ? Array.from(reactionsMap.values()).sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
           : [],
+        replyTo: replyToEventId
+          ? {
+              eventId: replyToEventId,
+              sender: "",
+              text: "",
+              msgtype: "m.text",
+            }
+          : null,
       };
     });
+
+  const messageIndex = new Map<string, UiReplyPreview>();
+  messages.forEach((message) => {
+    if (!message.eventId) return;
+    messageIndex.set(message.eventId, {
+      eventId: message.eventId,
+      sender: message.sender,
+      text: message.text,
+      msgtype: message.msgtype,
+    });
+  });
+
+  messages.forEach((message) => {
+    if (!message.replyTo) return;
+    const target = messageIndex.get(message.replyTo.eventId);
+    message.replyTo = target ?? {
+      eventId: message.replyTo.eventId,
+      sender: "Unknown",
+      text: "Original message",
+      msgtype: "m.text",
+    };
+  });
 
   return { messages };
 }

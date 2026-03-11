@@ -79,6 +79,7 @@ export function useMatrix() {
     const client = createAuthedMatrixClient({
       accessToken: auth.accessToken,
       userId: auth.userId,
+      deviceId: auth.deviceId,
     });
 
     clientRef.current = client;

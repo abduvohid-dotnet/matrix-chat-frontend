@@ -4,10 +4,15 @@ import { useMatrixRooms } from "../../hooks/useMatrixRooms";
 import { useMatrixTimeline } from "../../hooks/useMatrixTimeline";
 import { useMatrixDirectRoom } from "../../hooks/useMatrixDirectRoom";
 import { useMatrixRoomStatus } from "../../hooks/useMatrixRoomStatus";
+import { useMatrixCall } from "../../hooks/useMatrixCall";
+import type { UiMessage } from "../../hooks/useMatrixTimeline";
 import { RoomList } from "../chat/RoomList";
 import { ChatWindow } from "../chat/ChatWindow";
 import { MessageComposer } from "../chat/MessageComposer";
 import { EmptyConversation } from "../chat/EmptyConversation";
+import { CallPanel } from "../chat/CallPanel";
+import { Phone, Video } from "lucide-react";
+import type { MatrixReplyTarget } from "../../services/matrixReply";
 
 export function ChatLayout() {
   const { auth, logout } = useMatrix();
@@ -17,9 +22,11 @@ export function ChatLayout() {
   const [targetUser, setTargetUser] = useState("");
   const [directError, setDirectError] = useState<string | null>(null);
   const [creatingDirect, setCreatingDirect] = useState(false);
+  const [replyTo, setReplyTo] = useState<MatrixReplyTarget | null>(null);
   const { messages } = useMatrixTimeline(selectedRoomId);
   const { typingText, presenceText, online } = useMatrixRoomStatus(selectedRoomId);
   const { createOrGetDirectRoom } = useMatrixDirectRoom();
+  const matrixCall = useMatrixCall();
   const selectedRoom = rooms.find((room) => room.roomId === selectedRoomId) ?? null;
 
   useEffect(() => {
@@ -37,6 +44,28 @@ export function ChatLayout() {
       setSelectedRoomId(rooms[0].roomId);
     }
   }, [autoSelectEnabled, rooms, selectedRoomId]);
+
+  useEffect(() => {
+    if (!matrixCall.roomId) return;
+    if (selectedRoomId === matrixCall.roomId) return;
+    setAutoSelectEnabled(false);
+    setSelectedRoomId(matrixCall.roomId);
+  }, [matrixCall.roomId, selectedRoomId]);
+
+  useEffect(() => {
+    setReplyTo(null);
+  }, [selectedRoomId]);
+
+  const onReply = (message: UiMessage) => {
+    if (!message.eventId) return;
+
+    setReplyTo({
+      eventId: message.eventId,
+      sender: message.sender,
+      text: message.text,
+      msgtype: message.msgtype,
+    });
+  };
 
   const onStartDirect = async () => {
     setDirectError(null);
@@ -127,6 +156,26 @@ export function ChatLayout() {
                     <span className="presence-chip-dot" />
                     {typingText || presenceText}
                   </div>
+                  {selectedRoomId && !matrixCall.inCall && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn ghost call-trigger-btn"
+                        onClick={() => void matrixCall.startVoiceCall(selectedRoomId)}
+                      >
+                        <Phone size={16} />
+                        Voice
+                      </button>
+                      <button
+                        type="button"
+                        className="btn ghost call-trigger-btn"
+                        onClick={() => void matrixCall.startVideoCall(selectedRoomId)}
+                      >
+                        <Video size={16} />
+                        Video
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     className="btn ghost close-chat-btn"
@@ -139,10 +188,34 @@ export function ChatLayout() {
                   </button>
                 </div>
               </div>
-              <ChatWindow roomId={selectedRoomId} messages={messages} myUserId={auth.userId} />
+              {matrixCall.inCall && matrixCall.roomId === selectedRoomId && (
+                <CallPanel
+                  localStream={matrixCall.localStream}
+                  remoteStream={matrixCall.remoteStream}
+                  state={matrixCall.state}
+                  type={matrixCall.type}
+                  incoming={matrixCall.incoming}
+                  micMuted={matrixCall.micMuted}
+                  videoMuted={matrixCall.videoMuted}
+                  error={matrixCall.error}
+                  onAnswer={() => void matrixCall.answer()}
+                  onReject={matrixCall.reject}
+                  onHangup={matrixCall.hangup}
+                  onToggleMicrophone={() => void matrixCall.toggleMicrophone()}
+                  onToggleVideo={() => void matrixCall.toggleVideo()}
+                />
+              )}
+              <ChatWindow
+                roomId={selectedRoomId}
+                messages={messages}
+                myUserId={auth.userId}
+                onReply={onReply}
+              />
               <MessageComposer
                 roomId={selectedRoomId}
                 disabled={!selectedRoomId}
+                replyTo={replyTo}
+                onCancelReply={() => setReplyTo(null)}
               />
             </>
           )}

@@ -2,6 +2,7 @@
 import { useMatrix } from "../../app/providers/useMatrix";
 import { useMatrixSend } from "../../hooks/useMatrixSend";
 import { useMatrixUpload } from "../../hooks/useMatrixUpload";
+import type { MatrixReplyTarget } from "../../services/matrixReply";
 import { Paperclip } from "lucide-react";
 
 const QUICK_EMOJIS = ["\u{1F600}", "\u{1F602}", "\u{1F60D}", "\u{1F44D}", "\u{1F525}", "\u{1F389}"];
@@ -32,9 +33,13 @@ function toPercent(progress: UploadProgress): number {
 export function MessageComposer({
   roomId,
   disabled,
+  replyTo,
+  onCancelReply,
 }: {
   roomId: string;
   disabled: boolean;
+  replyTo: MatrixReplyTarget | null;
+  onCancelReply: () => void;
 }) {
   const { client } = useMatrix();
   const { sendText } = useMatrixSend();
@@ -107,7 +112,7 @@ export function MessageComposer({
     setError(null);
     try {
       if (trimmed) {
-        await sendText(roomId, trimmed);
+        await sendText(roomId, trimmed, replyTo);
       }
 
       for (const queued of queuedFiles) {
@@ -120,7 +125,7 @@ export function MessageComposer({
             if (prev[queued.id] === percent) return prev;
             return { ...prev, [queued.id]: percent };
           });
-        });
+        }, replyTo);
 
         setUploadProgressById((prev) => ({ ...prev, [queued.id]: 100 }));
       }
@@ -131,6 +136,7 @@ export function MessageComposer({
       setUploadProgressById({});
       setUploadingFileId(null);
       stopTyping();
+      onCancelReply();
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -164,6 +170,22 @@ export function MessageComposer({
 
   return (
     <div className="composer">
+      {replyTo && (
+        <div className="composer-reply">
+          <div className="composer-reply-meta">
+            <div className="composer-reply-label">Replying to {replyTo.sender}</div>
+            <div className="composer-reply-text">{replyTo.text || "Message"}</div>
+          </div>
+          <button
+            type="button"
+            className="composer-reply-close"
+            onClick={onCancelReply}
+            disabled={isSending}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       {queuedFiles.length > 0 && (
         <div className="composer-files">
           {queuedFiles.map((queued, index) => {

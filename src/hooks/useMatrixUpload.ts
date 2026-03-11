@@ -1,6 +1,7 @@
 import { useCallback } from "react";
-import { MsgType } from "matrix-js-sdk";
+import { EventType, MsgType } from "matrix-js-sdk";
 import { useMatrix } from "../app/providers/useMatrix";
+import { buildReplyMessageContent, type MatrixReplyTarget } from "../services/matrixReply";
 
 type UploadResponse = string | { content_uri?: string };
 type MediaMessageType = MsgType.Image | MsgType.Video | MsgType.Audio | MsgType.File;
@@ -88,6 +89,7 @@ export function useMatrixUpload() {
       roomId: string,
       file: File,
       onProgress?: (progress: UploadProgress) => void,
+      replyTo?: MatrixReplyTarget | null,
     ): Promise<MatrixUploadResult> => {
       if (!client) {
         throw new Error("Matrix client is not connected");
@@ -99,34 +101,34 @@ export function useMatrixUpload() {
         size: uploaded.size,
       };
 
+      const sendMessageContent = async (body: string, msgtype: MediaMessageType, url: string, info: { mimetype: string; size: number }) => {
+        const content = {
+          body,
+          msgtype,
+          url,
+          info,
+        };
+
+        if (replyTo) {
+          await client.sendEvent(
+            roomId,
+            EventType.RoomMessage,
+            buildReplyMessageContent(body, replyTo, msgtype, { url, info }) as never,
+          );
+          return;
+        }
+
+        await client.sendEvent(roomId, EventType.RoomMessage, content as never);
+      };
+
       if (uploaded.msgtype === MsgType.Image) {
-        await client.sendMessage(roomId, {
-          body: uploaded.name,
-          msgtype: MsgType.Image,
-          url: uploaded.mxcUrl,
-          info,
-        });
+        await sendMessageContent(uploaded.name, MsgType.Image, uploaded.mxcUrl, info);
       } else if (uploaded.msgtype === MsgType.Video) {
-        await client.sendMessage(roomId, {
-          body: uploaded.name,
-          msgtype: MsgType.Video,
-          url: uploaded.mxcUrl,
-          info,
-        });
+        await sendMessageContent(uploaded.name, MsgType.Video, uploaded.mxcUrl, info);
       } else if (uploaded.msgtype === MsgType.Audio) {
-        await client.sendMessage(roomId, {
-          body: uploaded.name,
-          msgtype: MsgType.Audio,
-          url: uploaded.mxcUrl,
-          info,
-        });
+        await sendMessageContent(uploaded.name, MsgType.Audio, uploaded.mxcUrl, info);
       } else {
-        await client.sendMessage(roomId, {
-          body: uploaded.name,
-          msgtype: MsgType.File,
-          url: uploaded.mxcUrl,
-          info,
-        });
+        await sendMessageContent(uploaded.name, MsgType.File, uploaded.mxcUrl, info);
       }
 
       return uploaded;

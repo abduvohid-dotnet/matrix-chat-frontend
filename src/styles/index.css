@@ -332,6 +332,13 @@ body {
   padding-inline: 12px;
 }
 
+.call-trigger-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-inline: 12px;
+}
+
 .conversation-badge {
   flex: 0 0 auto;
   border-radius: 999px;
@@ -360,6 +367,95 @@ body {
       rgba(230, 238, 244, 0.1) 6px,
       rgba(230, 238, 244, 0.1) 12px
     );
+}
+
+.call-panel {
+  border-bottom: 1px solid #e7eef3;
+  background: linear-gradient(180deg, #0f172a 0%, #152338 100%);
+  color: #f8fafc;
+  padding: 12px 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.call-stage {
+  position: relative;
+  min-height: 220px;
+  border-radius: 18px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top, rgba(61, 201, 179, 0.3), transparent 45%),
+    linear-gradient(180deg, rgba(25, 40, 61, 0.95) 0%, rgba(12, 20, 34, 0.98) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.call-avatar {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  text-align: center;
+  padding: 24px;
+}
+
+.call-remote-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.call-local-video {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 140px;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.38);
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.call-local-video.audio-only {
+  display: none;
+}
+
+.call-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.call-status {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.call-error {
+  font-size: 12px;
+  font-weight: 700;
+  color: #fecdd3;
+}
+
+.call-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.call-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.call-btn.danger {
+  color: #9f1239;
+  border-color: #f3c2cf;
+  background: #fff1f5;
 }
 
 .chat-empty {
@@ -432,6 +528,28 @@ body {
 .msg-text {
   font-size: 15px;
   line-height: 1.38;
+  word-break: break-word;
+}
+
+.msg-reply-preview {
+  border-left: 3px solid #4db6ac;
+  background: rgba(77, 182, 172, 0.1);
+  border-radius: 10px;
+  padding: 7px 10px;
+  margin-bottom: 8px;
+}
+
+.msg-reply-sender {
+  font-size: 12px;
+  font-weight: 800;
+  color: #0b5a54;
+  margin-bottom: 2px;
+}
+
+.msg-reply-text {
+  font-size: 12px;
+  line-height: 1.35;
+  color: #436072;
   word-break: break-word;
 }
 
@@ -578,6 +696,50 @@ body {
 .composer {
   border-top: 1px solid #e7eef3;
   background: rgba(255, 255, 255, 0.96);
+}
+
+.composer-reply {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 10px 0;
+}
+
+.composer-reply-meta {
+  flex: 1;
+  min-width: 0;
+  border-left: 3px solid #4db6ac;
+  background: rgba(77, 182, 172, 0.08);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.composer-reply-label {
+  font-size: 12px;
+  font-weight: 800;
+  color: #0b5a54;
+  margin-bottom: 2px;
+}
+
+.composer-reply-text {
+  font-size: 12px;
+  color: #4b5f70;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-reply-close {
+  border: 1px solid #d6e2e8;
+  border-radius: 10px;
+  background: #f8fbfd;
+  color: #385164;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 8px 10px;
+  cursor: pointer;
 }
 
 .composer .input-row {
@@ -843,10 +1005,20 @@ body {
 
   .conversation-head {
     align-items: flex-start;
+    flex-direction: column;
   }
 
   .conversation-head-right {
     width: 100%;
     justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .call-stage {
+    min-height: 180px;
+  }
+
+  .call-local-video {
+    width: 96px;
   }
 }

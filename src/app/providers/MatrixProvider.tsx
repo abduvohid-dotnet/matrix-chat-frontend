@@ -42,29 +42,34 @@ export function MatrixProvider({ children }: { children: ReactNode }) {
   const [auth, setAuth] = useState<StoredAuth | null>(() => readAuth());
   const [status, setStatus] = useState<MatrixContextValue["status"]>(() => (readAuth() ? "connected" : "disconnected"));
   const [error, setError] = useState<string | null>(null);
+  const [client, setClient] = useState<MatrixClient | null>(null);
 
   const clientRef = useRef<MatrixClient | null>(null);
-  const client = useMemo<MatrixClient | null>(() => {
-    if (!auth) return null;
-    return createAuthedMatrixClient({ accessToken: auth.accessToken, userId: auth.userId });
-  }, [auth]);
 
   useEffect(() => {
-    if (!client) {
+    if (!auth) {
+      setClient(null);
       clientRef.current = null;
       return;
     }
 
-    clientRef.current = client;
-    client.startClient({ initialSyncLimit: 20 });
+    const nextClient = createAuthedMatrixClient({
+      accessToken: auth.accessToken,
+      userId: auth.userId,
+      deviceId: auth.deviceId,
+    });
+
+    setClient(nextClient);
+    clientRef.current = nextClient;
+    nextClient.startClient({ initialSyncLimit: 20 });
 
     return () => {
-      client.stopClient();
-      if (clientRef.current === client) {
+      nextClient.stopClient();
+      if (clientRef.current === nextClient) {
         clientRef.current = null;
       }
     };
-  }, [client]);
+  }, [auth]);
 
   useEffect(() => {
     if (!client) return;
@@ -139,6 +144,7 @@ export function MatrixProvider({ children }: { children: ReactNode }) {
     const activeClient = clientRef.current;
     clearAuth();
     setAuth(null);
+    setClient(null);
 
     if (activeClient) {
       try {

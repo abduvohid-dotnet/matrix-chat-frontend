@@ -10,10 +10,12 @@ export function createTempMatrixClient(): MatrixClient {
 export function createAuthedMatrixClient(params: {
   accessToken: string;
   userId: string;
+  deviceId: string;
 }): MatrixClient {
   return createClient({
     baseUrl: BASE_URL,
     accessToken: params.accessToken,
     userId: params.userId,
+    deviceId: params.deviceId,
   });
 }

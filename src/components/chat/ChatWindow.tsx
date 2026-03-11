@@ -1,4 +1,5 @@
-import { useEffect, useState, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { MsgType } from "matrix-js-sdk";
 import type { UiMessage } from "../../hooks/useMatrixTimeline";
 import { useMatrix } from "../../app/providers/useMatrix";
 import { useMatrixMessageActions } from "../../hooks/useMatrixMessageActions";
@@ -10,7 +11,7 @@ function formatMessageTime(ts: number): string {
 
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "🔥"];
 const CONTEXT_MENU_WIDTH = 220;
-const CONTEXT_MENU_HEIGHT = 150;
+const CONTEXT_MENU_HEIGHT = 190;
 
 function formatBytes(size: number | null): string {
   if (typeof size !== "number" || size <= 0) return "";
@@ -33,6 +34,21 @@ function getRenderableKind(message: UiMessage): "image" | "video" | "audio" | "f
   return "text";
 }
 
+function getReplyPreviewText(message: Pick<UiMessage, "text" | "msgtype">): string {
+  const trimmed = message.text.trim();
+  if (trimmed) return trimmed;
+  if (message.msgtype === MsgType.Image) return "Photo";
+  if (message.msgtype === MsgType.Video) return "Video";
+  if (message.msgtype === MsgType.Audio) return "Audio";
+  if (message.msgtype === MsgType.File) return "File";
+  return "Message";
+}
+
+function clampText(value: string, maxLength = 90): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 3)}...`;
+}
+
 type ContextMenuState = {
   messageId: string;
   x: number;
@@ -43,10 +59,12 @@ export function ChatWindow({
   roomId,
   messages,
   myUserId,
+  onReply,
 }: {
   roomId: string;
   messages: UiMessage[];
   myUserId: string;
+  onReply: (message: UiMessage) => void;
 }) {
   const { client, auth } = useMatrix();
   const { editMessage, deleteMessage } = useMatrixMessageActions();
@@ -252,6 +270,11 @@ export function ChatWindow({
     await toggleReaction(roomId, message.eventId, emoji);
   };
 
+  const onReplyMessage = (message: UiMessage) => {
+    setContextMenu(null);
+    onReply(message);
+  };
+
   const contextMenuMessage = contextMenu
     ? visibleMessages.find((message) => message.id === contextMenu.messageId) ?? null
     : null;
@@ -277,108 +300,117 @@ export function ChatWindow({
       {!visibleMessages.length ? (
         <div className="chat-empty">No messages yet. Send first message.</div>
       ) : (
-        visibleMessages.map((m) => (
-          (() => {
-            const kind = getRenderableKind(m);
-            const mediaUrl = mediaHttpByMessageId.get(m.id);
+        visibleMessages.map((message) => {
+          const kind = getRenderableKind(message);
+          const mediaUrl = mediaHttpByMessageId.get(message.id);
 
-            return (
-          <div
-            key={m.id}
-            className={`msg ${m.sender === myUserId ? "me" : ""}`}
-            onContextMenu={(event) => {
-              if (m.deleted) return;
-              event.preventDefault();
-              setContextMenu({
-                messageId: m.id,
-                x: event.clientX,
-                y: event.clientY,
-              });
-            }}
-          >
-            <div className="msg-meta">
-              <div className="msg-sender">{m.sender}</div>
-              <div className="msg-time">
-                {formatMessageTime(m.ts)}
-                {m.edited && <span className="msg-edited">edited</span>}
+          return (
+            <div
+              key={message.id}
+              className={`msg ${message.sender === myUserId ? "me" : ""}`}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setContextMenu({
+                  messageId: message.id,
+                  x: event.clientX,
+                  y: event.clientY,
+                });
+              }}
+              onDoubleClick={() => {
+                if (!message.eventId) return;
+                onReply(message);
+              }}
+            >
+              <div className="msg-meta">
+                <div className="msg-sender">{message.sender}</div>
+                <div className="msg-time">
+                  {formatMessageTime(message.ts)}
+                  {message.edited && <span className="msg-edited">edited</span>}
+                </div>
               </div>
-            </div>
-            {kind === "image" && mediaUrl && (
-              <img
-                className="msg-media msg-image"
-                src={mediaUrl}
-                alt={m.text || "Image"}
-                loading="lazy"
-              />
-            )}
-            {kind === "video" && mediaUrl && (
-              <video className="msg-media msg-video" controls src={mediaUrl} />
-            )}
-            {kind === "audio" && mediaUrl && (
-              <audio className="msg-media msg-audio" controls src={mediaUrl} />
-            )}
-            {kind === "file" && mediaUrl && (
-              <a
-                className="msg-file-link"
-                href={mediaUrl}
-                target="_blank"
-                rel="noreferrer"
-                download
-              >
-                Download file {formatBytes(m.mediaSize)}
-              </a>
-            )}
 
-            {editingMessageId === m.id ? (
-              <div className="msg-edit-row">
-                <input
-                  className="input"
-                  value={editingText}
-                  onChange={(e) => setEditingText(e.target.value)}
-                  disabled={loadingMessageId === m.id}
+              {message.replyTo && (
+                <div className="msg-reply-preview">
+                  <div className="msg-reply-sender">{message.replyTo.sender}</div>
+                  <div className="msg-reply-text">{clampText(getReplyPreviewText(message.replyTo))}</div>
+                </div>
+              )}
+
+              {kind === "image" && mediaUrl && (
+                <img
+                  className="msg-media msg-image"
+                  src={mediaUrl}
+                  alt={message.text || "Image"}
+                  loading="lazy"
                 />
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => void submitEdit(m)}
-                  disabled={loadingMessageId === m.id || !editingText.trim()}
+              )}
+              {kind === "video" && mediaUrl && (
+                <video className="msg-media msg-video" controls src={mediaUrl} />
+              )}
+              {kind === "audio" && mediaUrl && (
+                <audio className="msg-media msg-audio" controls src={mediaUrl} />
+              )}
+              {kind === "file" && mediaUrl && (
+                <a
+                  className="msg-file-link"
+                  href={mediaUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  download
                 >
-                  Save
-                </button>
-                <button
-                  type="button"
-                  className="btn ghost"
-                  onClick={() => {
-                    setEditingMessageId(null);
-                    setEditingText("");
-                  }}
-                  disabled={loadingMessageId === m.id}
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <div className="msg-text">{m.text}</div>
-            )}
+                  Download file {formatBytes(message.mediaSize)}
+                </a>
+              )}
 
-            {m.reactions.length > 0 && (
-              <div className="msg-reactions">
-                {m.reactions.map((reaction) => (
+              {editingMessageId === message.id ? (
+                <div className="msg-edit-row">
+                  <input
+                    className="input"
+                    value={editingText}
+                    onChange={(event) => setEditingText(event.target.value)}
+                    disabled={loadingMessageId === message.id}
+                  />
                   <button
-                    key={`${m.id}-${reaction.key}-count`}
                     type="button"
-                    className={`msg-reaction-chip ${reaction.reactedByMe ? "mine" : ""}`}
-                    onClick={() => void onToggleReaction(m, reaction.key)}
+                    className="btn"
+                    onClick={() => void submitEdit(message)}
+                    disabled={loadingMessageId === message.id || !editingText.trim()}
                   >
-                    {reaction.key} {reaction.count}
+                    Save
                   </button>
-                ))}
-              </div>
-            )}
-          </div>
-            );
-          })()
-        ))
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    onClick={() => {
+                      setEditingMessageId(null);
+                      setEditingText("");
+                    }}
+                    disabled={loadingMessageId === message.id}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div className="msg-text">{message.text}</div>
+              )}
+
+              {message.reactions.length > 0 && (
+                <div className="msg-reactions">
+                  {message.reactions.map((reaction) => (
+                    <button
+                      key={`${message.id}-${reaction.key}-count`}
+                      type="button"
+                      className={`msg-reaction-chip ${reaction.reactedByMe ? "mine" : ""}`}
+                      onClick={() => void onToggleReaction(message, reaction.key)}
+                    >
+                      {reaction.key} {reaction.count}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })
       )}
       {contextMenuMessage && menuPosition && (
         <div
@@ -407,24 +439,35 @@ export function ChatWindow({
               );
             })}
           </div>
-          {contextMenuMessage.sender === myUserId && contextMenuMessage.eventId && (
+          {contextMenuMessage.eventId && (
             <div className="msg-context-actions">
               <button
                 type="button"
                 className="msg-context-item"
-                onClick={() => startEdit(contextMenuMessage)}
-                disabled={loadingMessageId === contextMenuMessage.id}
+                onClick={() => onReplyMessage(contextMenuMessage)}
               >
-                Edit
+                Reply
               </button>
-              <button
-                type="button"
-                className="msg-context-item danger"
-                onClick={() => void onDelete(contextMenuMessage)}
-                disabled={loadingMessageId === contextMenuMessage.id || !contextMenuMessage.canRedact}
-              >
-                {contextMenuMessage.canRedact ? "Delete" : "Syncing..."}
-              </button>
+              {contextMenuMessage.sender === myUserId && (
+                <button
+                  type="button"
+                  className="msg-context-item"
+                  onClick={() => startEdit(contextMenuMessage)}
+                  disabled={loadingMessageId === contextMenuMessage.id}
+                >
+                  Edit
+                </button>
+              )}
+              {contextMenuMessage.sender === myUserId && (
+                <button
+                  type="button"
+                  className="msg-context-item danger"
+                  onClick={() => void onDelete(contextMenuMessage)}
+                  disabled={loadingMessageId === contextMenuMessage.id || !contextMenuMessage.canRedact}
+                >
+                  {contextMenuMessage.canRedact ? "Delete" : "Syncing..."}
+                </button>
+              )}
             </div>
           )}
         </div>
