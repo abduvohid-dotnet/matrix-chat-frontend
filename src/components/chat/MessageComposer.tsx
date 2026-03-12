@@ -1,11 +1,22 @@
-﻿import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMatrix } from "../../app/providers/useMatrix";
 import { useMatrixSend } from "../../hooks/useMatrixSend";
 import { useMatrixUpload } from "../../hooks/useMatrixUpload";
 import type { MatrixReplyTarget } from "../../services/matrixReply";
+import {
+  escapeHtml,
+  formattedHtmlToPlainText,
+  normalizeComposerHtml,
+} from "../../services/textFormatting";
 import { Paperclip } from "lucide-react";
 
 const QUICK_EMOJIS = ["\u{1F600}", "\u{1F602}", "\u{1F60D}", "\u{1F44D}", "\u{1F525}", "\u{1F389}"];
+const FORMAT_ACTIONS = [
+  { label: "B", command: "bold", title: "Bold" },
+  { label: "I", command: "italic", title: "Italic" },
+  { label: "S", command: "strikeThrough", title: "Strike" },
+  { label: "</>", command: "code", title: "Code" },
+] as const;
 
 type QueuedUpload = {
   id: string;
@@ -21,15 +32,10 @@ function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
 
   const tagName = target.tagName;
-  return (
-    target.isContentEditable ||
-    tagName === "INPUT" ||
-    tagName === "TEXTAREA" ||
-    tagName === "SELECT"
-  );
+  return target.isContentEditable || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
 }
 
-function focusInput(element: HTMLInputElement | null): void {
+function focusInput(element: HTMLElement | null): void {
   if (!element) return;
   element.focus({ preventScroll: true });
 }
@@ -47,6 +53,25 @@ function toPercent(progress: UploadProgress): number {
   return Math.min(100, Math.max(0, raw));
 }
 
+function placeCaretAtEnd(element: HTMLElement): void {
+  const selection = window.getSelection();
+  if (!selection) return;
+
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function insertHtmlAtCursor(html: string): void {
+  document.execCommand("insertHTML", false, html);
+}
+
+function insertTextAtCursor(text: string): void {
+  document.execCommand("insertText", false, text);
+}
+
 export function MessageComposer({
   roomId,
   disabled,
@@ -62,7 +87,8 @@ export function MessageComposer({
   const { sendText } = useMatrixSend();
   const { sendFileMessage } = useMatrixUpload();
 
-  const [text, setText] = useState("");
+  const [plainText, setPlainText] = useState("");
+  const [editorHtml, setEditorHtml] = useState("");
   const [queuedFiles, setQueuedFiles] = useState<QueuedUpload[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
@@ -71,7 +97,7 @@ export function MessageComposer({
   const [uploadingFileId, setUploadingFileId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const textInputRef = useRef<HTMLInputElement | null>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
   const typingTimeoutRef = useRef<number | null>(null);
 
   const sendTyping = useCallback(
@@ -93,6 +119,38 @@ export function MessageComposer({
     }
     void sendTyping(false);
   }, [sendTyping]);
+
+  const onTextChange = useCallback(
+    (nextText: string) => {
+      setPlainText(nextText);
+
+      if (typingTimeoutRef.current !== null) {
+        window.clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
+      }
+
+      if (!nextText.trim()) {
+        void sendTyping(false);
+        return;
+      }
+
+      void sendTyping(true);
+      typingTimeoutRef.current = window.setTimeout(() => {
+        typingTimeoutRef.current = null;
+        void sendTyping(false);
+      }, 1800);
+    },
+    [sendTyping],
+  );
+
+  const syncEditorState = useCallback(
+    (nextHtml?: string) => {
+      const html = nextHtml ?? editorRef.current?.innerHTML ?? "";
+      setEditorHtml(html);
+      onTextChange(formattedHtmlToPlainText(html));
+    },
+    [onTextChange],
+  );
 
   useEffect(() => {
     return () => {
@@ -122,33 +180,55 @@ export function MessageComposer({
     });
   };
 
+  const clearEditor = () => {
+    setPlainText("");
+    setEditorHtml("");
+    if (editorRef.current) {
+      editorRef.current.innerHTML = "";
+    }
+  };
+
   const submit = async () => {
-    const trimmed = text.trim();
-    if ((!trimmed && queuedFiles.length === 0) || isSending || disabled) return;
+    const normalizedHtml = normalizeComposerHtml(editorHtml);
+    const trimmedText = formattedHtmlToPlainText(normalizedHtml).trim();
+
+    if ((!trimmedText && queuedFiles.length === 0) || isSending || disabled) return;
 
     setIsSending(true);
     setError(null);
     try {
-      if (trimmed) {
-        await sendText(roomId, trimmed, replyTo);
+      if (trimmedText) {
+        await sendText(
+          roomId,
+          {
+            body: trimmedText,
+            formattedBody: normalizedHtml || null,
+          },
+          replyTo,
+        );
       }
 
       for (const queued of queuedFiles) {
         setUploadingFileId(queued.id);
         setUploadProgressById((prev) => ({ ...prev, [queued.id]: 0 }));
 
-        await sendFileMessage(roomId, queued.file, (progress) => {
-          const percent = toPercent(progress);
-          setUploadProgressById((prev) => {
-            if (prev[queued.id] === percent) return prev;
-            return { ...prev, [queued.id]: percent };
-          });
-        }, replyTo);
+        await sendFileMessage(
+          roomId,
+          queued.file,
+          (progress) => {
+            const percent = toPercent(progress);
+            setUploadProgressById((prev) => {
+              if (prev[queued.id] === percent) return prev;
+              return { ...prev, [queued.id]: percent };
+            });
+          },
+          replyTo,
+        );
 
         setUploadProgressById((prev) => ({ ...prev, [queued.id]: 100 }));
       }
 
-      setText("");
+      clearEditor();
       setQueuedFiles([]);
       setShowEmoji(false);
       setUploadProgressById({});
@@ -158,7 +238,7 @@ export function MessageComposer({
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
-      focusInput(textInputRef.current);
+      focusInput(editorRef.current);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Message send failed");
     } finally {
@@ -167,29 +247,42 @@ export function MessageComposer({
     }
   };
 
-  const onTextChange = (nextText: string) => {
-    setText(nextText);
+  const applyFormat = (command: (typeof FORMAT_ACTIONS)[number]["command"]) => {
+    const editor = editorRef.current;
+    if (!editor || disabled || isSending) return;
 
-    if (typingTimeoutRef.current !== null) {
-      window.clearTimeout(typingTimeoutRef.current);
-      typingTimeoutRef.current = null;
-    }
+    focusInput(editor);
 
-    if (!nextText.trim()) {
-      void sendTyping(false);
+    if (command === "code") {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return;
+
+      const range = selection.getRangeAt(0);
+      if (!editor.contains(range.commonAncestorContainer)) return;
+
+      const selectedText = range.toString();
+      const html = `<code>${escapeHtml(selectedText || "code")}</code>`;
+      insertHtmlAtCursor(html);
+      syncEditorState();
       return;
     }
 
-    void sendTyping(true);
-    typingTimeoutRef.current = window.setTimeout(() => {
-      typingTimeoutRef.current = null;
-      void sendTyping(false);
-    }, 1800);
+    document.execCommand(command, false);
+    syncEditorState();
+  };
+
+  const insertEmoji = (emoji: string) => {
+    const editor = editorRef.current;
+    if (!editor || disabled || isSending) return;
+
+    focusInput(editor);
+    insertTextAtCursor(emoji);
+    syncEditorState();
   };
 
   useEffect(() => {
     if (disabled || isSending) return;
-    focusInput(textInputRef.current);
+    focusInput(editorRef.current);
   }, [disabled, isSending, roomId, replyTo]);
 
   useEffect(() => {
@@ -201,26 +294,30 @@ export function MessageComposer({
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (isEditableTarget(event.target)) return;
 
-      const input = textInputRef.current;
-      if (!input) return;
+      const editor = editorRef.current;
+      if (!editor) return;
 
       if (event.key.length === 1) {
         event.preventDefault();
-        focusInput(input);
-        onTextChange(`${text}${event.key}`);
+        focusInput(editor);
+        placeCaretAtEnd(editor);
+        insertTextAtCursor(event.key);
+        syncEditorState();
         return;
       }
 
-      if (event.key === "Backspace" && text.length > 0) {
+      if (event.key === "Backspace" && plainText.length > 0) {
         event.preventDefault();
-        focusInput(input);
-        onTextChange(text.slice(0, -1));
+        focusInput(editor);
+        placeCaretAtEnd(editor);
+        document.execCommand("delete", false);
+        syncEditorState();
         return;
       }
 
       if (event.key === "Enter") {
         event.preventDefault();
-        focusInput(input);
+        focusInput(editor);
       }
     };
 
@@ -228,7 +325,7 @@ export function MessageComposer({
     return () => {
       window.removeEventListener("keydown", onGlobalKeyDown);
     };
-  }, [disabled, isSending, text, onTextChange]);
+  }, [disabled, isSending, plainText, syncEditorState]);
 
   return (
     <div className="composer">
@@ -291,7 +388,7 @@ export function MessageComposer({
               key={emoji}
               type="button"
               className="composer-emoji-item"
-              onClick={() => onTextChange(`${text}${emoji}`)}
+              onClick={() => insertEmoji(emoji)}
               disabled={isSending || disabled}
             >
               {emoji}
@@ -299,6 +396,21 @@ export function MessageComposer({
           ))}
         </div>
       )}
+
+      <div className="composer-formatbar">
+        {FORMAT_ACTIONS.map((action) => (
+          <button
+            key={action.title}
+            type="button"
+            className="composer-format-btn"
+            title={action.title}
+            onClick={() => applyFormat(action.command)}
+            disabled={disabled || isSending}
+          >
+            {action.label}
+          </button>
+        ))}
+      </div>
 
       <div className="input-row">
         <button
@@ -325,23 +437,40 @@ export function MessageComposer({
         >
           Emoji
         </button>
-        <input
-          ref={textInputRef}
-          className="input"
-          value={text}
-          onChange={(e) => onTextChange(e.target.value)}
-          placeholder="Type a message..."
-          disabled={disabled || isSending}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
+        <div
+          ref={editorRef}
+          className="input composer-editor"
+          contentEditable={!disabled && !isSending}
+          suppressContentEditableWarning
+          role="textbox"
+          aria-multiline="true"
+          data-placeholder="Type a message..."
+          data-empty={plainText.trim().length === 0 ? "true" : "false"}
+          onInput={() => syncEditorState()}
+          onPaste={(event) => {
+            event.preventDefault();
+            const pastedText = event.clipboardData.getData("text/plain");
+            if (!pastedText) return;
+            insertTextAtCursor(pastedText);
+            syncEditorState();
+          }}
+          onBlur={() => {
+            const normalized = normalizeComposerHtml(editorRef.current?.innerHTML ?? "");
+            if (editorRef.current && editorRef.current.innerHTML !== normalized) {
+              editorRef.current.innerHTML = normalized;
+            }
+            syncEditorState(normalized);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
               void submit();
             }
           }}
         />
         <button
           className="btn"
-          disabled={disabled || isSending || (!text.trim() && queuedFiles.length === 0)}
+          disabled={disabled || isSending || (!plainText.trim() && queuedFiles.length === 0)}
           onClick={() => void submit()}
         >
           {isSending ? "Sending..." : "Send"}

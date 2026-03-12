@@ -1,4 +1,5 @@
 import { MsgType } from "matrix-js-sdk";
+import { escapeHtml, sanitizeFormattedHtml } from "./textFormatting";
 
 export type MatrixReplyTarget = {
   eventId: string;
@@ -7,13 +8,10 @@ export type MatrixReplyTarget = {
   msgtype?: string;
 };
 
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
+export type MatrixFormattedText = {
+  body: string;
+  formattedBody?: string | null;
+};
 
 function toQuotedLines(value: string): string {
   return value
@@ -37,6 +35,10 @@ export function stripMatrixReplyFallback(body: string): string {
   return body;
 }
 
+export function stripMatrixReplyFormattedFallback(formattedBody: string): string {
+  return formattedBody.replace(/^<mx-reply>[\s\S]*?<\/mx-reply>/i, "").trim();
+}
+
 function toReplyPreviewText(target: MatrixReplyTarget): string {
   const stripped = stripMatrixReplyFallback(target.text).trim();
   if (stripped) return stripped;
@@ -49,14 +51,18 @@ function toReplyPreviewText(target: MatrixReplyTarget): string {
 }
 
 export function buildReplyMessageContent(
-  body: string,
+  content: string | MatrixFormattedText,
   target: MatrixReplyTarget,
   msgtype: MsgType | string = MsgType.Text,
   extra: Record<string, unknown> = {},
 ) {
+  const body = typeof content === "string" ? content : content.body;
+  const formattedBody = typeof content === "string" ? null : content.formattedBody ?? null;
   const targetText = toReplyPreviewText(target);
   const safeTargetText = escapeHtml(targetText).replaceAll("\n", "<br />");
-  const safeBody = escapeHtml(body).replaceAll("\n", "<br />");
+  const safeBody = formattedBody
+    ? sanitizeFormattedHtml(formattedBody)
+    : escapeHtml(body).replaceAll("\n", "<br />");
 
   return {
     msgtype,

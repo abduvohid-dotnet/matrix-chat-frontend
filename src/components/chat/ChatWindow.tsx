@@ -4,6 +4,7 @@ import type { UiMessage } from "../../hooks/useMatrixTimeline";
 import { useMatrix } from "../../app/providers/useMatrix";
 import { useMatrixMessageActions } from "../../hooks/useMatrixMessageActions";
 import { useMatrixReactions } from "../../hooks/useMatrixReactions";
+import { formatMessageTextToHtml, stripFormattingMarkers } from "../../services/textFormatting";
 
 function formatMessageTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -35,7 +36,7 @@ function getRenderableKind(message: UiMessage): "image" | "video" | "audio" | "f
 }
 
 function getReplyPreviewText(message: Pick<UiMessage, "text" | "msgtype">): string {
-  const trimmed = message.text.trim();
+  const trimmed = stripFormattingMarkers(message.text).trim();
   if (trimmed) return trimmed;
   if (message.msgtype === MsgType.Image) return "Photo";
   if (message.msgtype === MsgType.Video) return "Video";
@@ -500,7 +501,12 @@ export function ChatWindow({
                   </button>
                 </div>
               ) : (
-                <div className="msg-text">{message.text}</div>
+                <div
+                  className="msg-text"
+                  dangerouslySetInnerHTML={{
+                    __html: message.formattedBody ?? formatMessageTextToHtml(message.text),
+                  }}
+                />
               )}
 
               {message.reactions.length > 0 && (

@@ -2,7 +2,11 @@ import { useEffect, useReducer } from "react";
 import { EventType, RoomEvent, type MatrixEvent, type Room } from "matrix-js-sdk";
 import { useMatrix } from "../app/providers/useMatrix";
 import { FORWARDED_FROM_KEY } from "../services/matrixForward";
-import { stripMatrixReplyFallback } from "../services/matrixReply";
+import {
+  stripMatrixReplyFallback,
+  stripMatrixReplyFormattedFallback,
+} from "../services/matrixReply";
+import { sanitizeFormattedHtml } from "../services/textFormatting";
 
 export type UiMessage = {
   id: string;
@@ -10,6 +14,7 @@ export type UiMessage = {
   canRedact: boolean;
   sender: string;
   text: string;
+  formattedBody: string | null;
   ts: number;
   edited: boolean;
   deleted: boolean;
@@ -44,8 +49,10 @@ type RoomMessageContent = {
   info?: unknown;
   "m.new_content"?: {
     body?: unknown;
+    formatted_body?: unknown;
     msgtype?: unknown;
   };
+  formatted_body?: unknown;
   "m.relates_to"?: {
     rel_type?: unknown;
     event_id?: unknown;
@@ -69,6 +76,7 @@ type UiReaction = {
 
 type Replacement = {
   body: string;
+  formattedBody: string | null;
   msgtype: string;
   ts: number;
 };
@@ -192,12 +200,13 @@ export function useMatrixTimeline(roomId: string | null) {
 
       const newContent = content["m.new_content"];
       const body = asString(newContent?.body) ?? asString(content.body) ?? "";
+      const formattedBody = asString(newContent?.formatted_body) ?? asString(content.formatted_body);
       const msgtype = asString(newContent?.msgtype) ?? asString(content.msgtype) ?? "m.text";
       const ts = event.getTs();
 
       const prev = replacements.get(targetEventId);
       if (!prev || prev.ts < ts) {
-        replacements.set(targetEventId, { body, msgtype, ts });
+        replacements.set(targetEventId, { body, formattedBody, msgtype, ts });
       }
       return;
     }
@@ -249,9 +258,11 @@ export function useMatrixTimeline(roomId: string | null) {
 
       const rawMsgType = asString(content.msgtype) ?? "m.text";
       const baseBody = stripMatrixReplyFallback(asString(content.body) ?? "");
+      const baseFormattedBody = stripMatrixReplyFormattedFallback(asString(content.formatted_body) ?? "");
 
       const msgtype = replacement?.msgtype ?? rawMsgType;
       const body = stripMatrixReplyFallback(replacement?.body ?? baseBody);
+      const formattedBody = replacement?.formattedBody ?? baseFormattedBody;
       const url = asString(content.url) ?? asString(content.file?.url);
       const replyToEventId = asString(relation?.["m.in_reply_to"]?.event_id);
 
@@ -268,6 +279,7 @@ export function useMatrixTimeline(roomId: string | null) {
         canRedact: Boolean(eventId),
         sender: event.getSender() ?? "unknown",
         text: body,
+        formattedBody: formattedBody ? sanitizeFormattedHtml(formattedBody) : null,
         ts: event.getTs(),
         edited: Boolean(replacement),
         deleted: false,

@@ -591,6 +591,27 @@ body {
   word-break: break-word;
 }
 
+.msg-text strong {
+  font-weight: 800;
+}
+
+.msg-text em {
+  font-style: italic;
+}
+
+.msg-text s {
+  text-decoration: line-through;
+}
+
+.msg-text code {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 0.92em;
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.08);
+  color: #0f172a;
+}
+
 .msg-reply-preview {
   width: 100%;
   border: none;
@@ -920,6 +941,64 @@ body {
 .composer .input-row {
   border-top: none;
   padding-top: 8px;
+}
+
+.composer-formatbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 10px 0;
+}
+
+.composer-format-btn {
+  min-width: 38px;
+  border: 1px solid #d4e1e8;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #173143;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.composer-format-btn:hover:not(:disabled) {
+  background: #eef5fa;
+}
+
+.composer-editor {
+  min-height: 44px;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.composer-editor[data-empty="true"]::before {
+  content: attr(data-placeholder);
+  color: #8a98aa;
+}
+
+.composer-editor strong {
+  font-weight: 800;
+}
+
+.composer-editor em {
+  font-style: italic;
+}
+
+.composer-editor s {
+  text-decoration: line-through;
+}
+
+.composer-editor code {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 0.92em;
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.08);
+  color: #0f172a;
 }
 
 .composer-files {
