@@ -49,5 +49,15 @@ export function useMatrixMessageActions() {
     [client],
   );
 
-  return { editMessage, deleteMessage };
+  const deleteMessages = useCallback(
+    async (roomId: string, eventIds: string[], reason?: string) => {
+      const uniqueIds = [...new Set(eventIds.filter(Boolean))];
+      for (const eventId of uniqueIds) {
+        await deleteMessage(roomId, eventId, reason);
+      }
+    },
+    [deleteMessage],
+  );
+
+  return { editMessage, deleteMessage, deleteMessages };
 }

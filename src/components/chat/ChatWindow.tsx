@@ -11,7 +11,7 @@ function formatMessageTime(ts: number): string {
 
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "🔥"];
 const CONTEXT_MENU_WIDTH = 220;
-const CONTEXT_MENU_HEIGHT = 190;
+const CONTEXT_MENU_HEIGHT = 230;
 
 function formatBytes(size: number | null): string {
   if (typeof size !== "number" || size <= 0) return "";
@@ -49,6 +49,11 @@ function clampText(value: string, maxLength = 90): string {
   return `${value.slice(0, maxLength - 3)}...`;
 }
 
+function isNearBottom(element: HTMLDivElement, threshold = 72): boolean {
+  const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+  return distance <= threshold;
+}
+
 type ContextMenuState = {
   messageId: string;
   x: number;
@@ -61,12 +66,22 @@ export function ChatWindow({
   myUserId,
   onReply,
   onForward,
+  selectedMessageIds,
+  selectionMode,
+  onStartSelection,
+  onToggleSelection,
+  hiddenEventIds,
 }: {
   roomId: string;
   messages: UiMessage[];
   myUserId: string;
   onReply: (message: UiMessage) => void;
   onForward: (message: UiMessage) => void;
+  selectedMessageIds: string[];
+  selectionMode: boolean;
+  onStartSelection: (message: UiMessage) => void;
+  onToggleSelection: (messageId: string) => void;
+  hiddenEventIds: string[];
 }) {
   const { client, auth } = useMatrix();
   const { editMessage, deleteMessage } = useMatrixMessageActions();
@@ -74,18 +89,27 @@ export function ChatWindow({
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  const messageRefs = useRef(new Map<string, HTMLDivElement>());
+  const highlightTimeoutRef = useRef<number | null>(null);
+  const previousRoomIdRef = useRef<string | null>(null);
+  const previousLastVisibleMessageIdRef = useRef<string | null>(null);
+  const previousVisibleMessageCountRef = useRef(0);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
   const [loadingMessageId, setLoadingMessageId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [optimisticDeletedByRoom, setOptimisticDeletedByRoom] = useState<Record<string, Set<string>>>({});
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [highlightedEventId, setHighlightedEventId] = useState<string | null>(null);
+  const [activeReplyMessageId, setActiveReplyMessageId] = useState<string | null>(null);
 
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages]);
+    return () => {
+      if (highlightTimeoutRef.current !== null) {
+        window.clearTimeout(highlightTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!editingMessageId) return;
@@ -95,6 +119,11 @@ export function ChatWindow({
       setEditingText("");
     }
   }, [editingMessageId, messages]);
+
+  useEffect(() => {
+    if (!selectionMode) return;
+    setContextMenu(null);
+  }, [selectionMode]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -167,10 +196,31 @@ export function ChatWindow({
   const visibleMessages = useMemo(
     () =>
       messages.filter(
-        (message) => !(message.eventId && optimisticDeletedIds.has(message.eventId)),
+        (message) => !(message.eventId && (optimisticDeletedIds.has(message.eventId) || hiddenEventIds.includes(message.eventId))),
       ),
-    [messages, optimisticDeletedIds],
+    [hiddenEventIds, messages, optimisticDeletedIds],
   );
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+
+    const lastVisibleMessage = visibleMessages[visibleMessages.length - 1] ?? null;
+    const lastVisibleMessageId = lastVisibleMessage?.id ?? null;
+    const visibleCountIncreased = visibleMessages.length > previousVisibleMessageCountRef.current;
+    const lastMessageChanged = lastVisibleMessageId !== previousLastVisibleMessageIdRef.current;
+    const shouldStickToBottom = isNearBottom(element);
+
+    if ((visibleCountIncreased || lastMessageChanged) && shouldStickToBottom) {
+      element.scrollTop = element.scrollHeight;
+    }
+
+    previousRoomIdRef.current = roomId;
+    previousLastVisibleMessageIdRef.current = lastVisibleMessageId;
+    previousVisibleMessageCountRef.current = visibleMessages.length;
+  }, [roomId, visibleMessages]);
+
+  const selectedMessageIdSet = useMemo(() => new Set(selectedMessageIds), [selectedMessageIds]);
 
   const mediaHttpByMessageId = useMemo(() => {
     const map = new Map<string, string>();
@@ -282,6 +332,27 @@ export function ChatWindow({
     onForward(message);
   };
 
+  const jumpToMessage = (eventId: string, sourceMessageId: string) => {
+    const element = messageRefs.current.get(eventId);
+    if (!element) return;
+
+    element.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+
+    setHighlightedEventId(eventId);
+    setActiveReplyMessageId(sourceMessageId);
+    if (highlightTimeoutRef.current !== null) {
+      window.clearTimeout(highlightTimeoutRef.current);
+    }
+    highlightTimeoutRef.current = window.setTimeout(() => {
+      setHighlightedEventId((current) => (current === eventId ? null : current));
+      setActiveReplyMessageId((current) => (current === sourceMessageId ? null : current));
+      highlightTimeoutRef.current = null;
+    }, 1600);
+  };
+
   const contextMenuMessage = contextMenu
     ? visibleMessages.find((message) => message.id === contextMenu.messageId) ?? null
     : null;
@@ -310,12 +381,23 @@ export function ChatWindow({
         visibleMessages.map((message) => {
           const kind = getRenderableKind(message);
           const mediaUrl = mediaHttpByMessageId.get(message.id);
+          const isSelected = selectedMessageIdSet.has(message.id);
 
           return (
             <div
               key={message.id}
-              className={`msg ${message.sender === myUserId ? "me" : ""}`}
+              ref={(node) => {
+                if (!message.eventId) return;
+                if (node) {
+                  messageRefs.current.set(message.eventId, node);
+                } else {
+                  messageRefs.current.delete(message.eventId);
+                }
+              }}
+              className={`msg ${message.sender === myUserId ? "me" : ""} ${selectionMode ? "selecting" : ""} ${isSelected ? "selected" : ""} ${message.eventId === highlightedEventId ? "jump-highlight" : ""}`}
+              data-event-id={message.eventId ?? undefined}
               onContextMenu={(event) => {
+                if (selectionMode) return;
                 event.preventDefault();
                 setContextMenu({
                   messageId: message.id,
@@ -323,11 +405,18 @@ export function ChatWindow({
                   y: event.clientY,
                 });
               }}
+              onClick={() => {
+                if (!selectionMode) return;
+                onToggleSelection(message.id);
+              }}
               onDoubleClick={() => {
+                if (selectionMode) return;
                 if (!message.eventId) return;
                 onReply(message);
               }}
             >
+              {selectionMode && <div className="msg-select-indicator">{isSelected ? "✓" : ""}</div>}
+
               <div className="msg-meta">
                 <div className="msg-sender">{message.sender}</div>
                 <div className="msg-time">
@@ -343,10 +432,17 @@ export function ChatWindow({
               )}
 
               {message.replyTo && (
-                <div className="msg-reply-preview">
+                <button
+                  type="button"
+                  className={`msg-reply-preview ${activeReplyMessageId === message.id ? "active" : ""}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    jumpToMessage(message.replyTo!.eventId, message.id);
+                  }}
+                >
                   <div className="msg-reply-sender">{message.replyTo.sender}</div>
                   <div className="msg-reply-text">{clampText(getReplyPreviewText(message.replyTo))}</div>
-                </div>
+                </button>
               )}
 
               {kind === "image" && mediaUrl && (
@@ -414,7 +510,10 @@ export function ChatWindow({
                       key={`${message.id}-${reaction.key}-count`}
                       type="button"
                       className={`msg-reaction-chip ${reaction.reactedByMe ? "mine" : ""}`}
-                      onClick={() => void onToggleReaction(message, reaction.key)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void onToggleReaction(message, reaction.key);
+                      }}
                     >
                       {reaction.key} {reaction.count}
                     </button>
@@ -467,6 +566,16 @@ export function ChatWindow({
                 onClick={() => onForwardMessage(contextMenuMessage)}
               >
                 Forward
+              </button>
+              <button
+                type="button"
+                className="msg-context-item"
+                onClick={() => {
+                  setContextMenu(null);
+                  onStartSelection(contextMenuMessage);
+                }}
+              >
+                Select
               </button>
               {contextMenuMessage.sender === myUserId && (
                 <button

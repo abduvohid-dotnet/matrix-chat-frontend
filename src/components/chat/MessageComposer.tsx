@@ -17,6 +17,23 @@ type UploadProgress = {
   total: number;
 };
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+
+  const tagName = target.tagName;
+  return (
+    target.isContentEditable ||
+    tagName === "INPUT" ||
+    tagName === "TEXTAREA" ||
+    tagName === "SELECT"
+  );
+}
+
+function focusInput(element: HTMLInputElement | null): void {
+  if (!element) return;
+  element.focus({ preventScroll: true });
+}
+
 function createUploadId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -54,6 +71,7 @@ export function MessageComposer({
   const [uploadingFileId, setUploadingFileId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textInputRef = useRef<HTMLInputElement | null>(null);
   const typingTimeoutRef = useRef<number | null>(null);
 
   const sendTyping = useCallback(
@@ -140,6 +158,7 @@ export function MessageComposer({
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
+      focusInput(textInputRef.current);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Message send failed");
     } finally {
@@ -167,6 +186,49 @@ export function MessageComposer({
       void sendTyping(false);
     }, 1800);
   };
+
+  useEffect(() => {
+    if (disabled || isSending) return;
+    focusInput(textInputRef.current);
+  }, [disabled, isSending, roomId, replyTo]);
+
+  useEffect(() => {
+    if (disabled) return;
+
+    const onGlobalKeyDown = (event: KeyboardEvent) => {
+      if (isSending) return;
+      if (event.defaultPrevented) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isEditableTarget(event.target)) return;
+
+      const input = textInputRef.current;
+      if (!input) return;
+
+      if (event.key.length === 1) {
+        event.preventDefault();
+        focusInput(input);
+        onTextChange(`${text}${event.key}`);
+        return;
+      }
+
+      if (event.key === "Backspace" && text.length > 0) {
+        event.preventDefault();
+        focusInput(input);
+        onTextChange(text.slice(0, -1));
+        return;
+      }
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        focusInput(input);
+      }
+    };
+
+    window.addEventListener("keydown", onGlobalKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onGlobalKeyDown);
+    };
+  }, [disabled, isSending, text, onTextChange]);
 
   return (
     <div className="composer">
@@ -264,6 +326,7 @@ export function MessageComposer({
           Emoji
         </button>
         <input
+          ref={textInputRef}
           className="input"
           value={text}
           onChange={(e) => onTextChange(e.target.value)}

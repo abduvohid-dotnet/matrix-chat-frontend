@@ -46,5 +46,12 @@ export function useMatrixForward() {
     await client.sendEvent(targetRoomId, EventType.RoomMessage, content as never);
   };
 
-  return { forwardMessage };
+  const forwardMessages = async (targetRoomId: string, messages: UiMessage[]) => {
+    const ordered = [...messages].sort((a, b) => a.ts - b.ts);
+    for (const message of ordered) {
+      await forwardMessage(targetRoomId, message);
+    }
+  };
+
+  return { forwardMessage, forwardMessages };
 }

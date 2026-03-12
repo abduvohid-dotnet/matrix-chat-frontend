@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMatrix } from "../../app/providers/useMatrix";
 import { useMatrixRooms } from "../../hooks/useMatrixRooms";
 import { useMatrixTimeline } from "../../hooks/useMatrixTimeline";
@@ -6,6 +6,7 @@ import { useMatrixDirectRoom } from "../../hooks/useMatrixDirectRoom";
 import { useMatrixRoomStatus } from "../../hooks/useMatrixRoomStatus";
 import { useMatrixCall } from "../../hooks/useMatrixCall";
 import { useMatrixForward } from "../../hooks/useMatrixForward";
+import { useMatrixMessageActions } from "../../hooks/useMatrixMessageActions";
 import type { UiMessage } from "../../hooks/useMatrixTimeline";
 import { RoomList } from "../chat/RoomList";
 import { ChatWindow } from "../chat/ChatWindow";
@@ -26,14 +27,31 @@ export function ChatLayout() {
   const [creatingDirect, setCreatingDirect] = useState(false);
   const [replyTo, setReplyTo] = useState<MatrixReplyTarget | null>(null);
   const [forwardMessage, setForwardMessage] = useState<UiMessage | null>(null);
+  const [forwardMessages, setForwardMessages] = useState<UiMessage[]>([]);
   const [forwarding, setForwarding] = useState(false);
   const [forwardError, setForwardError] = useState<string | null>(null);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [selectionActionError, setSelectionActionError] = useState<string | null>(null);
+  const [hiddenSelectedEventIds, setHiddenSelectedEventIds] = useState<string[]>([]);
   const { messages } = useMatrixTimeline(selectedRoomId);
   const { typingText, presenceText, online } = useMatrixRoomStatus(selectedRoomId);
   const { createOrGetDirectRoom } = useMatrixDirectRoom();
-  const { forwardMessage: sendForward } = useMatrixForward();
+  const { forwardMessage: sendForward, forwardMessages: sendForwardMany } = useMatrixForward();
+  const { deleteMessages } = useMatrixMessageActions();
   const matrixCall = useMatrixCall();
   const selectedRoom = rooms.find((room) => room.roomId === selectedRoomId) ?? null;
+  const selectedMessages = useMemo(
+    () => messages.filter((message) => selectedMessageIds.includes(message.id)),
+    [messages, selectedMessageIds],
+  );
+  const deletableSelectedMessages = useMemo(
+    () =>
+      selectedMessages.filter(
+        (message) => message.sender === auth?.userId && message.canRedact && Boolean(message.eventId),
+      ),
+    [auth?.userId, selectedMessages],
+  );
 
   useEffect(() => {
     if (!rooms.length) {
@@ -64,8 +82,33 @@ export function ChatLayout() {
 
   useEffect(() => {
     setForwardMessage(null);
+    setForwardMessages([]);
     setForwardError(null);
+    setSelectedMessageIds([]);
+    setHiddenSelectedEventIds([]);
+    setSelectionActionError(null);
   }, [selectedRoomId]);
+
+  useEffect(() => {
+    const visibleIds = new Set(messages.map((message) => message.id));
+    setSelectedMessageIds((prev) => {
+      const next = prev.filter((id) => visibleIds.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [messages]);
+
+  useEffect(() => {
+    const activeEventIds = new Set(
+      messages
+        .map((message) => message.eventId)
+        .filter((eventId): eventId is string => Boolean(eventId)),
+    );
+
+    setHiddenSelectedEventIds((prev) => {
+      const next = prev.filter((eventId) => activeEventIds.has(eventId));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [messages]);
 
   const onReply = (message: UiMessage) => {
     if (!message.eventId) return;
@@ -81,6 +124,49 @@ export function ChatLayout() {
   const onForward = (message: UiMessage) => {
     setForwardError(null);
     setForwardMessage(message);
+    setForwardMessages([message]);
+  };
+
+  const onStartSelection = (message: UiMessage) => {
+    setSelectionActionError(null);
+    setSelectedMessageIds((prev) => (prev.includes(message.id) ? prev : [...prev, message.id]));
+  };
+
+  const onToggleSelection = (messageId: string) => {
+    setSelectionActionError(null);
+    setSelectedMessageIds((prev) =>
+      prev.includes(messageId)
+        ? prev.filter((id) => id !== messageId)
+        : [...prev, messageId],
+    );
+  };
+
+  const onForwardSelected = () => {
+    if (!selectedMessages.length) return;
+    setForwardError(null);
+    setForwardMessage(selectedMessages[0] ?? null);
+    setForwardMessages(selectedMessages);
+  };
+
+  const onDeleteSelected = async () => {
+    if (!selectedRoomId || !deletableSelectedMessages.length) return;
+
+    const eventIds = deletableSelectedMessages
+      .map((message) => message.eventId)
+      .filter((eventId): eventId is string => Boolean(eventId));
+
+    setBulkDeleting(true);
+    setSelectionActionError(null);
+    setHiddenSelectedEventIds((prev) => [...new Set([...prev, ...eventIds])]);
+    try {
+      await deleteMessages(selectedRoomId, eventIds, "Deleted by user");
+      setSelectedMessageIds([]);
+    } catch (error: unknown) {
+      setHiddenSelectedEventIds((prev) => prev.filter((eventId) => !eventIds.includes(eventId)));
+      setSelectionActionError(error instanceof Error ? error.message : "Bulk delete failed");
+    } finally {
+      setBulkDeleting(false);
+    }
   };
 
   const onSubmitForward = async (targetRoomId: string) => {
@@ -89,8 +175,14 @@ export function ChatLayout() {
     setForwarding(true);
     setForwardError(null);
     try {
-      await sendForward(targetRoomId, forwardMessage);
+      if (forwardMessages.length > 1) {
+        await sendForwardMany(targetRoomId, forwardMessages);
+      } else {
+        await sendForward(targetRoomId, forwardMessage);
+      }
       setForwardMessage(null);
+      setForwardMessages([]);
+      setSelectedMessageIds([]);
       setSelectedRoomId(targetRoomId);
       setAutoSelectEnabled(false);
     } catch (error: unknown) {
@@ -181,32 +273,74 @@ export function ChatLayout() {
             <>
               <div className="conversation-head">
                 <div>
-                  <div className="conversation-title">{selectedRoom?.name || selectedRoomId}</div>
-                  <div className="conversation-meta">{selectedRoom?.roomId}</div>
+                  {selectedMessageIds.length > 0 ? (
+                    <>
+                      <div className="conversation-title">{selectedMessageIds.length} selected</div>
+                      <div className="conversation-meta">Selection mode</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="conversation-title">{selectedRoom?.name || selectedRoomId}</div>
+                      <div className="conversation-meta">{selectedRoom?.roomId}</div>
+                    </>
+                  )}
                 </div>
                 <div className="conversation-head-right">
-                  <div className={`presence-chip ${online ? "online" : "offline"}`}>
-                    <span className="presence-chip-dot" />
-                    {typingText || presenceText}
-                  </div>
-                  {selectedRoomId && !matrixCall.inCall && (
+                  {selectedMessageIds.length > 0 ? (
                     <>
                       <button
                         type="button"
-                        className="btn ghost call-trigger-btn"
-                        onClick={() => void matrixCall.startVoiceCall(selectedRoomId)}
+                        className="btn ghost"
+                        onClick={() => void onForwardSelected()}
+                        disabled={forwarding || bulkDeleting}
                       >
-                        <Phone size={16} />
-                        Voice
+                        Forward
                       </button>
                       <button
                         type="button"
-                        className="btn ghost call-trigger-btn"
-                        onClick={() => void matrixCall.startVideoCall(selectedRoomId)}
+                        className="btn ghost"
+                        onClick={() => void onDeleteSelected()}
+                        disabled={bulkDeleting || deletableSelectedMessages.length === 0}
                       >
-                        <Video size={16} />
-                        Video
+                        {bulkDeleting ? "Deleting..." : "Delete"}
                       </button>
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        onClick={() => {
+                          setSelectedMessageIds([]);
+                          setSelectionActionError(null);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <div className={`presence-chip ${online ? "online" : "offline"}`}>
+                        <span className="presence-chip-dot" />
+                        {typingText || presenceText}
+                      </div>
+                      {selectedRoomId && !matrixCall.inCall && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn ghost call-trigger-btn"
+                            onClick={() => void matrixCall.startVoiceCall(selectedRoomId)}
+                          >
+                            <Phone size={16} />
+                            Voice
+                          </button>
+                          <button
+                            type="button"
+                            className="btn ghost call-trigger-btn"
+                            onClick={() => void matrixCall.startVideoCall(selectedRoomId)}
+                          >
+                            <Video size={16} />
+                            Video
+                          </button>
+                        </>
+                      )}
                     </>
                   )}
                   <button
@@ -244,7 +378,13 @@ export function ChatLayout() {
                 myUserId={auth.userId}
                 onReply={onReply}
                 onForward={onForward}
+                selectedMessageIds={selectedMessageIds}
+                selectionMode={selectedMessageIds.length > 0}
+                onStartSelection={onStartSelection}
+                onToggleSelection={onToggleSelection}
+                hiddenEventIds={hiddenSelectedEventIds}
               />
+              {selectionActionError && <div className="chat-selection-error">{selectionActionError}</div>}
               <MessageComposer
                 roomId={selectedRoomId}
                 disabled={!selectedRoomId}
@@ -258,13 +398,14 @@ export function ChatLayout() {
       <ForwardDialog
         open={Boolean(forwardMessage)}
         rooms={rooms}
-        sourceMessage={forwardMessage}
+        sourceMessages={forwardMessages}
         currentRoomId={selectedRoomId}
         busy={forwarding}
         error={forwardError}
         onClose={() => {
           if (forwarding) return;
           setForwardMessage(null);
+          setForwardMessages([]);
           setForwardError(null);
         }}
         onForward={(roomId) => void onSubmitForward(roomId)}

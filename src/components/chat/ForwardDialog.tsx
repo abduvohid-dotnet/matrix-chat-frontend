@@ -19,7 +19,7 @@ function clamp(value: string, maxLength = 120): string {
 export function ForwardDialog({
   open,
   rooms,
-  sourceMessage,
+  sourceMessages,
   currentRoomId,
   busy,
   error,
@@ -28,7 +28,7 @@ export function ForwardDialog({
 }: {
   open: boolean;
   rooms: Room[];
-  sourceMessage: UiMessage | null;
+  sourceMessages: UiMessage[];
   currentRoomId: string | null;
   busy: boolean;
   error: string | null;
@@ -54,7 +54,13 @@ export function ForwardDialog({
     });
   }, [candidateRooms, query]);
 
-  if (!open || !sourceMessage) return null;
+  if (!open || sourceMessages.length === 0) return null;
+
+  const firstMessage = sourceMessages[0];
+  const title = sourceMessages.length > 1 ? `Forward ${sourceMessages.length} messages` : "Forward message";
+  const subtitle = sourceMessages.length > 1
+    ? `${sourceMessages.length} ta tanlangan message boshqa roomga yuboriladi`
+    : clamp(getPreviewText(firstMessage));
 
   return (
     <div className="forward-dialog-backdrop" onClick={onClose}>
@@ -64,8 +70,8 @@ export function ForwardDialog({
       >
         <div className="forward-dialog-head">
           <div>
-            <div className="forward-dialog-title">Forward message</div>
-            <div className="forward-dialog-subtitle">{clamp(getPreviewText(sourceMessage))}</div>
+            <div className="forward-dialog-title">{title}</div>
+            <div className="forward-dialog-subtitle">{subtitle}</div>
           </div>
           <button type="button" className="forward-dialog-close" onClick={onClose} disabled={busy}>
             Close
