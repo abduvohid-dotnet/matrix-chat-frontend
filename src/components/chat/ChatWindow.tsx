@@ -67,22 +67,32 @@ export function ChatWindow({
   myUserId,
   onReply,
   onForward,
+  onPin,
+  onUnpin,
   selectedMessageIds,
   selectionMode,
   onStartSelection,
   onToggleSelection,
   hiddenEventIds,
+  pinnedEventIds,
+  jumpToEventId,
+  onJumpHandled,
 }: {
   roomId: string;
   messages: UiMessage[];
   myUserId: string;
   onReply: (message: UiMessage) => void;
   onForward: (message: UiMessage) => void;
+  onPin: (message: UiMessage) => void;
+  onUnpin: (message: UiMessage) => void;
   selectedMessageIds: string[];
   selectionMode: boolean;
   onStartSelection: (message: UiMessage) => void;
   onToggleSelection: (messageId: string) => void;
   hiddenEventIds: string[];
+  pinnedEventIds: string[];
+  jumpToEventId: string | null;
+  onJumpHandled: () => void;
 }) {
   const { client, auth } = useMatrix();
   const { editMessage, deleteMessage } = useMatrixMessageActions();
@@ -159,6 +169,26 @@ export function ChatWindow({
   }, [contextMenu, messages]);
 
   useEffect(() => {
+    if (!jumpToEventId) return;
+    const element = messageRefs.current.get(jumpToEventId);
+    if (element) {
+      element.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      setHighlightedEventId(jumpToEventId);
+      if (highlightTimeoutRef.current !== null) {
+        window.clearTimeout(highlightTimeoutRef.current);
+      }
+      highlightTimeoutRef.current = window.setTimeout(() => {
+        setHighlightedEventId((current) => (current === jumpToEventId ? null : current));
+        highlightTimeoutRef.current = null;
+      }, 1600);
+    }
+    onJumpHandled();
+  }, [jumpToEventId, onJumpHandled]);
+
+  useEffect(() => {
     const activeEventIds = new Set(
       messages
         .map((message) => message.eventId)
@@ -222,6 +252,7 @@ export function ChatWindow({
   }, [roomId, visibleMessages]);
 
   const selectedMessageIdSet = useMemo(() => new Set(selectedMessageIds), [selectedMessageIds]);
+  const pinnedEventIdSet = useMemo(() => new Set(pinnedEventIds), [pinnedEventIds]);
 
   const mediaHttpByMessageId = useMemo(() => {
     const map = new Map<string, string>();
@@ -333,6 +364,16 @@ export function ChatWindow({
     onForward(message);
   };
 
+  const onPinMessage = (message: UiMessage) => {
+    setContextMenu(null);
+    onPin(message);
+  };
+
+  const onUnpinMessage = (message: UiMessage) => {
+    setContextMenu(null);
+    onUnpin(message);
+  };
+
   const jumpToMessage = (eventId: string, sourceMessageId: string) => {
     const element = messageRefs.current.get(eventId);
     if (!element) return;
@@ -383,6 +424,7 @@ export function ChatWindow({
           const kind = getRenderableKind(message);
           const mediaUrl = mediaHttpByMessageId.get(message.id);
           const isSelected = selectedMessageIdSet.has(message.id);
+          const isPinned = Boolean(message.eventId && pinnedEventIdSet.has(message.eventId));
 
           return (
             <div
@@ -419,7 +461,10 @@ export function ChatWindow({
               {selectionMode && <div className="msg-select-indicator">{isSelected ? "✓" : ""}</div>}
 
               <div className="msg-meta">
-                <div className="msg-sender">{message.sender}</div>
+                <div className="msg-sender-wrap">
+                  <div className="msg-sender">{message.sender}</div>
+                  {isPinned && <span className="msg-pinned-badge">Pinned</span>}
+                </div>
                 <div className="msg-time">
                   {formatMessageTime(message.ts)}
                   {message.edited && <span className="msg-edited">edited</span>}
@@ -572,6 +617,17 @@ export function ChatWindow({
                 onClick={() => onForwardMessage(contextMenuMessage)}
               >
                 Forward
+              </button>
+              <button
+                type="button"
+                className="msg-context-item"
+                onClick={() =>
+                  (contextMenuMessage.eventId && pinnedEventIdSet.has(contextMenuMessage.eventId))
+                    ? onUnpinMessage(contextMenuMessage)
+                    : onPinMessage(contextMenuMessage)
+                }
+              >
+                {(contextMenuMessage.eventId && pinnedEventIdSet.has(contextMenuMessage.eventId)) ? "Unpin" : "Pin"}
               </button>
               <button
                 type="button"

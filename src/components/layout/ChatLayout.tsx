@@ -7,6 +7,8 @@ import { useMatrixRoomStatus } from "../../hooks/useMatrixRoomStatus";
 import { useMatrixCall } from "../../hooks/useMatrixCall";
 import { useMatrixForward } from "../../hooks/useMatrixForward";
 import { useMatrixMessageActions } from "../../hooks/useMatrixMessageActions";
+import { useMatrixPins } from "../../hooks/useMatrixPins";
+import { useMatrixGroups } from "../../hooks/useMatrixGroups";
 import type { UiMessage } from "../../hooks/useMatrixTimeline";
 import { RoomList } from "../chat/RoomList";
 import { ChatWindow } from "../chat/ChatWindow";
@@ -14,6 +16,7 @@ import { MessageComposer } from "../chat/MessageComposer";
 import { EmptyConversation } from "../chat/EmptyConversation";
 import { CallPanel } from "../chat/CallPanel";
 import { ForwardDialog } from "../chat/ForwardDialog";
+import { GroupManagementPanel } from "../chat/GroupManagementPanel";
 import { Phone, Video } from "lucide-react";
 import type { MatrixReplyTarget } from "../../services/matrixReply";
 
@@ -25,6 +28,13 @@ export function ChatLayout() {
   const [targetUser, setTargetUser] = useState("");
   const [directError, setDirectError] = useState<string | null>(null);
   const [creatingDirect, setCreatingDirect] = useState(false);
+  const [groupName, setGroupName] = useState("");
+  const [groupInvitees, setGroupInvitees] = useState("");
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [groupCreateError, setGroupCreateError] = useState<string | null>(null);
+  const [groupManageOpen, setGroupManageOpen] = useState(false);
+  const [groupManageBusy, setGroupManageBusy] = useState(false);
+  const [groupManageError, setGroupManageError] = useState<string | null>(null);
   const [replyTo, setReplyTo] = useState<MatrixReplyTarget | null>(null);
   const [forwardMessage, setForwardMessage] = useState<UiMessage | null>(null);
   const [forwardMessages, setForwardMessages] = useState<UiMessage[]>([]);
@@ -34,7 +44,19 @@ export function ChatLayout() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [selectionActionError, setSelectionActionError] = useState<string | null>(null);
   const [hiddenSelectedEventIds, setHiddenSelectedEventIds] = useState<string[]>([]);
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [jumpToPinnedEventId, setJumpToPinnedEventId] = useState<string | null>(null);
   const { messages } = useMatrixTimeline(selectedRoomId);
+  const { pinnedEventIds, pinMessage, unpinMessage } = useMatrixPins(selectedRoomId);
+  const {
+    members: groupMembers,
+    myPowerLevel,
+    powerLevels,
+    createGroup,
+    inviteUsers,
+    setMemberPowerLevel,
+    updatePermissionLevels,
+  } = useMatrixGroups(selectedRoomId);
   const { typingText, presenceText, online } = useMatrixRoomStatus(selectedRoomId);
   const { createOrGetDirectRoom } = useMatrixDirectRoom();
   const { forwardMessage: sendForward, forwardMessages: sendForwardMany } = useMatrixForward();
@@ -52,6 +74,14 @@ export function ChatLayout() {
       ),
     [auth?.userId, selectedMessages],
   );
+  const pinnedMessages = useMemo(
+    () =>
+      pinnedEventIds
+        .map((eventId) => messages.find((message) => message.eventId === eventId))
+        .filter((message): message is UiMessage => Boolean(message)),
+    [messages, pinnedEventIds],
+  );
+  const latestPinnedMessage = pinnedMessages[0] ?? null;
 
   useEffect(() => {
     if (!rooms.length) {
@@ -87,6 +117,10 @@ export function ChatLayout() {
     setSelectedMessageIds([]);
     setHiddenSelectedEventIds([]);
     setSelectionActionError(null);
+    setPinError(null);
+    setJumpToPinnedEventId(null);
+    setGroupManageOpen(false);
+    setGroupManageError(null);
   }, [selectedRoomId]);
 
   useEffect(() => {
@@ -125,6 +159,54 @@ export function ChatLayout() {
     setForwardError(null);
     setForwardMessage(message);
     setForwardMessages([message]);
+  };
+
+  const onCreateGroup = async () => {
+    setCreatingGroup(true);
+    setGroupCreateError(null);
+    try {
+      const roomId = await createGroup(groupName, groupInvitees);
+      setSelectedRoomId(roomId);
+      setAutoSelectEnabled(false);
+      setGroupName("");
+      setGroupInvitees("");
+    } catch (error: unknown) {
+      setGroupCreateError(error instanceof Error ? error.message : "Group creation failed");
+    } finally {
+      setCreatingGroup(false);
+    }
+  };
+
+  const onPin = async (message: UiMessage) => {
+    if (!message.eventId) return;
+    setPinError(null);
+    try {
+      await pinMessage(message.eventId);
+    } catch (error: unknown) {
+      setPinError(error instanceof Error ? error.message : "Pin failed");
+    }
+  };
+
+  const onUnpin = async (message: UiMessage) => {
+    if (!message.eventId) return;
+    setPinError(null);
+    try {
+      await unpinMessage(message.eventId);
+    } catch (error: unknown) {
+      setPinError(error instanceof Error ? error.message : "Unpin failed");
+    }
+  };
+
+  const runGroupAction = async (action: () => Promise<void>) => {
+    setGroupManageBusy(true);
+    setGroupManageError(null);
+    try {
+      await action();
+    } catch (error: unknown) {
+      setGroupManageError(error instanceof Error ? error.message : "Group update failed");
+    } finally {
+      setGroupManageBusy(false);
+    }
   };
 
   const onStartSelection = (message: UiMessage) => {
@@ -255,6 +337,30 @@ export function ChatLayout() {
             </div>
             {directError && <div className="error direct-error">{directError}</div>}
           </div>
+          <div className="direct-create">
+            <div className="direct-create-title">Create group</div>
+            <input
+              className="input"
+              value={groupName}
+              onChange={(e) => setGroupName(e.target.value)}
+              placeholder="Group name"
+            />
+            <textarea
+              className="input group-create-textarea"
+              value={groupInvitees}
+              onChange={(e) => setGroupInvitees(e.target.value)}
+              placeholder="@user1:server, @user2:server"
+            />
+            <button
+              type="button"
+              className="btn"
+              disabled={creatingGroup || !groupName.trim()}
+              onClick={() => void onCreateGroup()}
+            >
+              {creatingGroup ? "Creating..." : "Create group"}
+            </button>
+            {groupCreateError && <div className="error direct-error">{groupCreateError}</div>}
+          </div>
           <RoomList
             rooms={rooms}
             selectedRoomId={selectedRoomId}
@@ -325,6 +431,13 @@ export function ChatLayout() {
                         <>
                           <button
                             type="button"
+                            className="btn ghost"
+                            onClick={() => setGroupManageOpen((prev) => !prev)}
+                          >
+                            {groupManageOpen ? "Close manage" : "Manage group"}
+                          </button>
+                          <button
+                            type="button"
                             className="btn ghost call-trigger-btn"
                             onClick={() => void matrixCall.startVoiceCall(selectedRoomId)}
                           >
@@ -372,17 +485,55 @@ export function ChatLayout() {
                   onToggleVideo={() => void matrixCall.toggleVideo()}
                 />
               )}
+              {groupManageOpen && selectedRoomId && (
+                <GroupManagementPanel
+                  members={groupMembers}
+                  myPowerLevel={myPowerLevel}
+                  inviteLevel={powerLevels.invite ?? 50}
+                  redactLevel={powerLevels.redact ?? 50}
+                  kickLevel={powerLevels.kick ?? 75}
+                  banLevel={powerLevels.ban ?? 75}
+                  busy={groupManageBusy}
+                  error={groupManageError}
+                  onInvite={(value) => runGroupAction(() => inviteUsers(selectedRoomId, value))}
+                  onChangeRole={(userId, value) =>
+                    runGroupAction(() => setMemberPowerLevel(selectedRoomId, userId, value))
+                  }
+                  onChangePermission={(key, value) =>
+                    runGroupAction(() => updatePermissionLevels(selectedRoomId, { [key]: value }))
+                  }
+                />
+              )}
+              {latestPinnedMessage && (
+                <button
+                  type="button"
+                  className="pinned-banner"
+                  onClick={() => setJumpToPinnedEventId(latestPinnedMessage.eventId)}
+                >
+                  <div className="pinned-banner-label">
+                    Pinned message
+                    {pinnedMessages.length > 1 ? ` (${pinnedMessages.length})` : ""}
+                  </div>
+                  <div className="pinned-banner-text">{latestPinnedMessage.text || "Message"}</div>
+                </button>
+              )}
+              {pinError && <div className="chat-selection-error">{pinError}</div>}
               <ChatWindow
                 roomId={selectedRoomId}
                 messages={messages}
                 myUserId={auth.userId}
                 onReply={onReply}
                 onForward={onForward}
+                onPin={onPin}
+                onUnpin={onUnpin}
                 selectedMessageIds={selectedMessageIds}
                 selectionMode={selectedMessageIds.length > 0}
                 onStartSelection={onStartSelection}
                 onToggleSelection={onToggleSelection}
                 hiddenEventIds={hiddenSelectedEventIds}
+                pinnedEventIds={pinnedEventIds}
+                jumpToEventId={jumpToPinnedEventId}
+                onJumpHandled={() => setJumpToPinnedEventId(null)}
               />
               {selectionActionError && <div className="chat-selection-error">{selectionActionError}</div>}
               <MessageComposer
