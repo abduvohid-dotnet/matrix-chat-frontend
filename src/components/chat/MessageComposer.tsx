@@ -448,12 +448,36 @@ export function MessageComposer({
           data-empty={plainText.trim().length === 0 ? "true" : "false"}
           onInput={() => syncEditorState()}
           onPaste={(event) => {
+            const items = Array.from(event.clipboardData.items);
+            const imageItem = items.find(
+              (item) => item.kind === "file" && item.type.startsWith("image/"),
+            );
+
+            if (imageItem) {
+              event.preventDefault();
+              const file = imageItem.getAsFile();
+              if (!file) return;
+
+              const safeFile = new File(
+                [file],
+                `pasted-image-${Date.now()}.png`,
+              );
+
+              setQueuedFiles((prev) => [
+                ...prev,
+                { id: createUploadId(), file: safeFile },
+              ]);
+              return;
+            }
+
             event.preventDefault();
             const pastedText = event.clipboardData.getData("text/plain");
             if (!pastedText) return;
             insertTextAtCursor(pastedText);
             syncEditorState();
-          }}
+          }
+
+          }
           onBlur={() => {
             const normalized = normalizeComposerHtml(editorRef.current?.innerHTML ?? "");
             if (editorRef.current && editorRef.current.innerHTML !== normalized) {
