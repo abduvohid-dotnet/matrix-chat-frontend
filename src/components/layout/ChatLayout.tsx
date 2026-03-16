@@ -17,7 +17,7 @@ import { EmptyConversation } from "../chat/EmptyConversation";
 import { CallPanel } from "../chat/CallPanel";
 import { ForwardDialog } from "../chat/ForwardDialog";
 import { GroupManagementPanel } from "../chat/GroupManagementPanel";
-import { Phone, Video } from "lucide-react";
+import { Phone } from "lucide-react";
 import type { MatrixReplyTarget } from "../../services/matrixReply";
 
 export function ChatLayout() {
@@ -378,7 +378,13 @@ export function ChatLayout() {
           ) : (
             <>
               <div className="conversation-head">
-                <div>
+                <div className="conversation-head-main">
+                  <div className="conversation-avatar">
+                    {selectedMessageIds.length > 0
+                      ? selectedMessageIds.length
+                      : (selectedRoom?.name || selectedRoomId).trim().charAt(0).toUpperCase()}
+                  </div>
+                  <div>
                   {selectedMessageIds.length > 0 ? (
                     <>
                       <div className="conversation-title">{selectedMessageIds.length} selected</div>
@@ -390,6 +396,7 @@ export function ChatLayout() {
                       <div className="conversation-meta">{selectedRoom?.roomId}</div>
                     </>
                   )}
+                  </div>
                 </div>
                 <div className="conversation-head-right">
                   {selectedMessageIds.length > 0 ? (
@@ -444,14 +451,6 @@ export function ChatLayout() {
                             <Phone size={16} />
                             Voice
                           </button>
-                          <button
-                            type="button"
-                            className="btn ghost call-trigger-btn"
-                            onClick={() => void matrixCall.startVideoCall(selectedRoomId)}
-                          >
-                            <Video size={16} />
-                            Video
-                          </button>
                         </>
                       )}
                     </>
@@ -473,16 +472,13 @@ export function ChatLayout() {
                   localStream={matrixCall.localStream}
                   remoteStream={matrixCall.remoteStream}
                   state={matrixCall.state}
-                  type={matrixCall.type}
                   incoming={matrixCall.incoming}
                   micMuted={matrixCall.micMuted}
-                  videoMuted={matrixCall.videoMuted}
                   error={matrixCall.error}
                   onAnswer={() => void matrixCall.answer()}
                   onReject={matrixCall.reject}
                   onHangup={matrixCall.hangup}
                   onToggleMicrophone={() => void matrixCall.toggleMicrophone()}
-                  onToggleVideo={() => void matrixCall.toggleVideo()}
                 />
               )}
               {groupManageOpen && selectedRoomId && (

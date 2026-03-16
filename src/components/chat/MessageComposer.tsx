@@ -8,7 +8,7 @@ import {
   formattedHtmlToPlainText,
   normalizeComposerHtml,
 } from "../../services/textFormatting";
-import { Paperclip } from "lucide-react";
+import { Mic, Paperclip, SendHorizontal, Trash2 } from "lucide-react";
 
 const QUICK_EMOJIS = ["\u{1F600}", "\u{1F602}", "\u{1F60D}", "\u{1F44D}", "\u{1F525}", "\u{1F389}"];
 const FORMAT_ACTIONS = [
@@ -27,6 +27,15 @@ type UploadProgress = {
   loaded: number;
   total: number;
 };
+
+const AUDIO_MIME_CANDIDATES = [
+  "audio/webm;codecs=opus",
+  "audio/webm",
+  "audio/ogg;codecs=opus",
+  "audio/mp4",
+] as const;
+
+const RECORDING_BARS = [9, 14, 10, 18, 12, 20, 11, 16, 9, 19, 13, 17, 10, 15, 8, 18];
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -51,6 +60,27 @@ function toPercent(progress: UploadProgress): number {
   if (!progress.total || progress.total <= 0) return 0;
   const raw = Math.round((progress.loaded / progress.total) * 100);
   return Math.min(100, Math.max(0, raw));
+}
+
+function formatRecordingDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function getRecordingMimeType(): string {
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") {
+    return "";
+  }
+
+  return AUDIO_MIME_CANDIDATES.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
+}
+
+function getRecordingExtension(mimeType: string): string {
+  if (mimeType.includes("ogg")) return "ogg";
+  if (mimeType.includes("mp4")) return "m4a";
+  return "webm";
 }
 
 function placeCaretAtEnd(element: HTMLElement): void {
@@ -95,10 +125,19 @@ export function MessageComposer({
   const [error, setError] = useState<string | null>(null);
   const [uploadProgressById, setUploadProgressById] = useState<Record<string, number>>({});
   const [uploadingFileId, setUploadingFileId] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDurationMs, setRecordingDurationMs] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const typingTimeoutRef = useRef<number | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<BlobPart[]>([]);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const recordingTimerRef = useRef<number | null>(null);
+  const recordingStartedAtRef = useRef<number | null>(null);
+  const keepRecordingRef = useRef(true);
+  const sendRecordingImmediatelyRef = useRef(false);
 
   const sendTyping = useCallback(
     async (typing: boolean) => {
@@ -158,14 +197,47 @@ export function MessageComposer({
     };
   }, [stopTyping]);
 
+  const stopRecordingTimer = useCallback(() => {
+    if (recordingTimerRef.current !== null) {
+      window.clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+  }, []);
+
+  const cleanupRecordingResources = useCallback(() => {
+    stopRecordingTimer();
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    recordingStreamRef.current = null;
+    mediaRecorderRef.current = null;
+    recordingChunksRef.current = [];
+    recordingStartedAtRef.current = null;
+    keepRecordingRef.current = true;
+    sendRecordingImmediatelyRef.current = false;
+  }, [stopRecordingTimer]);
+
   useEffect(() => {
     stopTyping();
   }, [roomId, stopTyping]);
 
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        keepRecordingRef.current = false;
+        mediaRecorderRef.current.stop();
+      }
+      cleanupRecordingResources();
+    };
+  }, [cleanupRecordingResources]);
+
+  const addQueuedFiles = useCallback((files: File[]) => {
+    if (files.length === 0) return;
+    const next = files.map((file) => ({ id: createUploadId(), file }));
+    setQueuedFiles((prev) => [...prev, ...next]);
+  }, []);
+
   const queueSelectedFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    const next = Array.from(files).map((file) => ({ id: createUploadId(), file }));
-    setQueuedFiles((prev) => [...prev, ...next]);
+    addQueuedFiles(Array.from(files));
   };
 
   const removeQueuedFile = (index: number) => {
@@ -188,11 +260,137 @@ export function MessageComposer({
     }
   };
 
+  const stopAudioRecording = useCallback((keepRecording: boolean, sendImmediately = false) => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) return;
+
+    keepRecordingRef.current = keepRecording;
+    sendRecordingImmediatelyRef.current = sendImmediately;
+    setIsRecording(false);
+    stopRecordingTimer();
+
+    if (recorder.state !== "inactive") {
+      recorder.stop();
+      return;
+    }
+
+    cleanupRecordingResources();
+    setRecordingDurationMs(0);
+  }, [cleanupRecordingResources, stopRecordingTimer]);
+
+  const startAudioRecording = useCallback(async () => {
+    if (disabled || isSending || isRecording) return;
+    if (typeof window === "undefined" || typeof navigator === "undefined") return;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Browser audio recordingni qo'llamaydi");
+      return;
+    }
+    if (typeof MediaRecorder === "undefined") {
+      setError("MediaRecorder mavjud emas");
+      return;
+    }
+
+    setError(null);
+    setShowEmoji(false);
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = getRecordingMimeType();
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+
+      recordingStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      recordingChunksRef.current = [];
+      recordingStartedAtRef.current = Date.now();
+      keepRecordingRef.current = true;
+      setRecordingDurationMs(0);
+      setIsRecording(true);
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordingChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onerror = () => {
+        setError("Audio yozishda xatolik yuz berdi");
+      };
+
+      recorder.onstop = () => {
+        const shouldKeep = keepRecordingRef.current;
+        const nextMimeType = recorder.mimeType || mimeType || "audio/webm";
+        const blob = new Blob(recordingChunksRef.current, { type: nextMimeType });
+
+        cleanupRecordingResources();
+        setIsRecording(false);
+        setRecordingDurationMs(0);
+
+        if (!shouldKeep || blob.size === 0) return;
+
+        const extension = getRecordingExtension(nextMimeType);
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const file = new File(
+          [blob],
+          `Audio message ${timestamp}.${extension}`,
+          { type: nextMimeType, lastModified: Date.now() },
+        );
+
+        if (sendRecordingImmediatelyRef.current) {
+          setIsSending(true);
+          setError(null);
+          setUploadingFileId("recording");
+          setUploadProgressById({ recording: 0 });
+
+          void sendFileMessage(
+            roomId,
+            file,
+            (progress) => {
+              const percent = toPercent(progress);
+              setUploadProgressById((prev) => ({ ...prev, recording: percent }));
+            },
+            replyTo,
+          )
+            .then(() => {
+              setUploadProgressById({});
+              setUploadingFileId(null);
+              stopTyping();
+              onCancelReply();
+              focusInput(editorRef.current);
+            })
+            .catch((sendError: unknown) => {
+              setError(sendError instanceof Error ? sendError.message : "Audio message yuborilmadi");
+            })
+            .finally(() => {
+              setIsSending(false);
+              setUploadingFileId(null);
+              setUploadProgressById({});
+            });
+          return;
+        }
+
+        addQueuedFiles([file]);
+        setError(null);
+      };
+
+      recorder.start(250);
+      recordingTimerRef.current = window.setInterval(() => {
+        const startedAt = recordingStartedAtRef.current;
+        if (!startedAt) return;
+        setRecordingDurationMs(Date.now() - startedAt);
+      }, 200);
+    } catch (recordError) {
+      cleanupRecordingResources();
+      setIsRecording(false);
+      setRecordingDurationMs(0);
+      setError(recordError instanceof Error ? recordError.message : "Audio recording boshlanmadi");
+    }
+  }, [addQueuedFiles, cleanupRecordingResources, disabled, isRecording, isSending, onCancelReply, replyTo, roomId, sendFileMessage, stopTyping]);
+
   const submit = async () => {
     const normalizedHtml = normalizeComposerHtml(editorHtml);
     const trimmedText = formattedHtmlToPlainText(normalizedHtml).trim();
 
-    if ((!trimmedText && queuedFiles.length === 0) || isSending || disabled) return;
+    if (isRecording || (!trimmedText && queuedFiles.length === 0) || isSending || disabled) return;
 
     setIsSending(true);
     setError(null);
@@ -281,12 +479,12 @@ export function MessageComposer({
   };
 
   useEffect(() => {
-    if (disabled || isSending) return;
+    if (disabled || isSending || isRecording) return;
     focusInput(editorRef.current);
-  }, [disabled, isSending, roomId, replyTo]);
+  }, [disabled, isRecording, isSending, roomId, replyTo]);
 
   useEffect(() => {
-    if (disabled) return;
+    if (disabled || isRecording) return;
 
     const onGlobalKeyDown = (event: KeyboardEvent) => {
       if (isSending) return;
@@ -325,7 +523,7 @@ export function MessageComposer({
     return () => {
       window.removeEventListener("keydown", onGlobalKeyDown);
     };
-  }, [disabled, isSending, plainText, syncEditorState]);
+  }, [disabled, isRecording, isSending, plainText, syncEditorState]);
 
   return (
     <div className="composer">
@@ -375,6 +573,42 @@ export function MessageComposer({
         </div>
       )}
 
+      {isRecording && (
+        <div className="composer-recording-live">
+          <button
+            type="button"
+            className="composer-recording-trash"
+            onClick={() => stopAudioRecording(false)}
+            disabled={isSending}
+            title="Discard recording"
+          >
+            <Trash2 size={18} />
+          </button>
+          <div className="composer-recording-track">
+            <div className="composer-recording-pulse" />
+            <div className="composer-recording-bars" aria-hidden>
+              {RECORDING_BARS.map((height, index) => (
+                <span
+                  key={`recording-bar-${height}-${index}`}
+                  className="composer-recording-bar"
+                  style={{ height: `${height}px`, animationDelay: `${index * 0.08}s` }}
+                />
+              ))}
+            </div>
+            <div className="composer-recording-live-time">{formatRecordingDuration(recordingDurationMs)}</div>
+          </div>
+          <button
+            type="button"
+            className="composer-recording-send"
+            onClick={() => stopAudioRecording(true, true)}
+            disabled={isSending}
+            title="Send voice message"
+          >
+            <SendHorizontal size={18} />
+          </button>
+        </div>
+      )}
+
       {isSending && uploadingFileId && (
         <div className="composer-uploading-status">
           Uploading... {uploadProgressById[uploadingFileId] ?? 0}%
@@ -397,6 +631,7 @@ export function MessageComposer({
         </div>
       )}
 
+      {!isRecording && (
       <div className="composer-formatbar">
         {FORMAT_ACTIONS.map((action) => (
           <button
@@ -405,100 +640,114 @@ export function MessageComposer({
             className="composer-format-btn"
             title={action.title}
             onClick={() => applyFormat(action.command)}
-            disabled={disabled || isSending}
+            disabled={disabled || isSending || isRecording}
           >
             {action.label}
           </button>
         ))}
       </div>
+      )}
 
       <div className="input-row">
-        <button
-          type="button"
-          className="btn ghost composer-action"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={disabled || isSending}
-        >
-          <Paperclip />
-        </button>
         <input
           ref={fileInputRef}
           type="file"
           multiple
           className="composer-file-input"
           onChange={(e) => queueSelectedFiles(e.target.files)}
-          disabled={disabled || isSending}
+          disabled={disabled || isSending || isRecording}
+          accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar"
         />
-        <button
-          type="button"
-          className="btn ghost composer-action"
-          onClick={() => setShowEmoji((prev) => !prev)}
-          disabled={disabled || isSending}
-        >
-          Emoji
-        </button>
-        <div
-          ref={editorRef}
-          className="input composer-editor"
-          contentEditable={!disabled && !isSending}
-          suppressContentEditableWarning
-          role="textbox"
-          aria-multiline="true"
-          data-placeholder="Type a message..."
-          data-empty={plainText.trim().length === 0 ? "true" : "false"}
-          onInput={() => syncEditorState()}
-          onPaste={(event) => {
-            const items = Array.from(event.clipboardData.items);
-            const imageItem = items.find(
-              (item) => item.kind === "file" && item.type.startsWith("image/"),
-            );
-
-            if (imageItem) {
-              event.preventDefault();
-              const file = imageItem.getAsFile();
-              if (!file) return;
-
-              const safeFile = new File(
-                [file],
-                `pasted-image-${Date.now()}.png`,
+        {!isRecording && (
+        <div className="composer-shell">
+          <button
+            type="button"
+            className="btn ghost composer-action"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={disabled || isSending || isRecording}
+            title="Attach file"
+          >
+            <Paperclip size={18} />
+          </button>
+          <button
+            type="button"
+            className="btn ghost composer-action"
+            onClick={() => void startAudioRecording()}
+            disabled={disabled || isSending}
+            title="Record audio message"
+          >
+            <Mic size={18} />
+          </button>
+          <button
+            type="button"
+            className="btn ghost composer-action composer-emoji-toggle"
+            onClick={() => setShowEmoji((prev) => !prev)}
+            disabled={disabled || isSending || isRecording}
+          >
+            Emoji
+          </button>
+          <div
+            ref={editorRef}
+            className="input composer-editor"
+            contentEditable={!disabled && !isSending && !isRecording}
+            suppressContentEditableWarning
+            role="textbox"
+            aria-multiline="true"
+            data-placeholder="Type a message..."
+            data-empty={plainText.trim().length === 0 ? "true" : "false"}
+            onInput={() => syncEditorState()}
+            onPaste={(event) => {
+              const items = Array.from(event.clipboardData.items);
+              const imageItem = items.find(
+                (item) => item.kind === "file" && item.type.startsWith("image/"),
               );
 
-              setQueuedFiles((prev) => [
-                ...prev,
-                { id: createUploadId(), file: safeFile },
-              ]);
-              return;
-            }
+              if (imageItem) {
+                event.preventDefault();
+                const file = imageItem.getAsFile();
+                if (!file) return;
 
-            event.preventDefault();
-            const pastedText = event.clipboardData.getData("text/plain");
-            if (!pastedText) return;
-            insertTextAtCursor(pastedText);
-            syncEditorState();
-          }
+                const safeFile = new File(
+                  [file],
+                  `pasted-image-${Date.now()}.png`,
+                );
 
-          }
-          onBlur={() => {
-            const normalized = normalizeComposerHtml(editorRef.current?.innerHTML ?? "");
-            if (editorRef.current && editorRef.current.innerHTML !== normalized) {
-              editorRef.current.innerHTML = normalized;
-            }
-            syncEditorState(normalized);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
+                setQueuedFiles((prev) => [
+                  ...prev,
+                  { id: createUploadId(), file: safeFile },
+                ]);
+                return;
+              }
+
               event.preventDefault();
-              void submit();
-            }
-          }}
-        />
-        <button
-          className="btn"
-          disabled={disabled || isSending || (!plainText.trim() && queuedFiles.length === 0)}
-          onClick={() => void submit()}
-        >
-          {isSending ? "Sending..." : "Send"}
-        </button>
+              const pastedText = event.clipboardData.getData("text/plain");
+              if (!pastedText) return;
+              insertTextAtCursor(pastedText);
+              syncEditorState();
+            }}
+            onBlur={() => {
+              const normalized = normalizeComposerHtml(editorRef.current?.innerHTML ?? "");
+              if (editorRef.current && editorRef.current.innerHTML !== normalized) {
+                editorRef.current.innerHTML = normalized;
+              }
+              syncEditorState(normalized);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void submit();
+              }
+            }}
+          />
+          <button
+            className="btn composer-send-btn"
+            disabled={disabled || isSending || isRecording || (!plainText.trim() && queuedFiles.length === 0)}
+            onClick={() => void submit()}
+          >
+            {isSending ? "Sending..." : "Send"}
+          </button>
+        </div>
+        )}
       </div>
       {error && <div className="error composer-error">{error}</div>}
     </div>

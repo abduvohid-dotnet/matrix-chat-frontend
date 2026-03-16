@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MsgType } from "matrix-js-sdk";
+import { AudioLines, Clock3, Download, FileText, Pause, Play, PhoneCall, PhoneMissed } from "lucide-react";
 import type { UiMessage } from "../../hooks/useMatrixTimeline";
 import { useMatrix } from "../../app/providers/useMatrix";
 import { useMatrixMessageActions } from "../../hooks/useMatrixMessageActions";
@@ -50,6 +51,30 @@ function clampText(value: string, maxLength = 90): string {
   return `${value.slice(0, maxLength - 3)}...`;
 }
 
+function getAttachmentTitle(message: UiMessage, fallback: string): string {
+  const text = message.text.trim();
+  return text || fallback;
+}
+
+function formatAudioClock(seconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainder = safeSeconds % 60;
+  return `${minutes}:${String(remainder).padStart(2, "0")}`;
+}
+
+function buildVoiceBars(seed: string, count = 34): number[] {
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
+  }
+
+  return Array.from({ length: count }, (_, index) => {
+    hash = (hash * 1664525 + 1013904223 + index) >>> 0;
+    return 5 + (hash % 18);
+  });
+}
+
 function isNearBottom(element: HTMLDivElement, threshold = 72): boolean {
   const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
   return distance <= threshold;
@@ -60,6 +85,143 @@ type ContextMenuState = {
   x: number;
   y: number;
 };
+
+function AudioMessagePlayer({
+  src,
+  seed,
+}: {
+  src: string;
+  seed: string;
+}) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const waveformRef = useRef<HTMLDivElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const bars = useMemo(() => buildVoiceBars(seed), [seed]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const syncState = () => {
+      setCurrentTime(audio.currentTime || 0);
+      setDuration(Number.isFinite(audio.duration) ? audio.duration : 0);
+    };
+    const onEnded = () => {
+      setIsPlaying(false);
+      setCurrentTime(0);
+    };
+
+    audio.addEventListener("loadedmetadata", syncState);
+    audio.addEventListener("timeupdate", syncState);
+    audio.addEventListener("durationchange", syncState);
+    audio.addEventListener("ended", onEnded);
+
+    return () => {
+      audio.removeEventListener("loadedmetadata", syncState);
+      audio.removeEventListener("timeupdate", syncState);
+      audio.removeEventListener("durationchange", syncState);
+      audio.removeEventListener("ended", onEnded);
+    };
+  }, []);
+
+  const togglePlayback = async () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (isPlaying) {
+      audio.pause();
+      setIsPlaying(false);
+      return;
+    }
+
+    await audio.play();
+    setIsPlaying(true);
+  };
+
+  const seekAudio = (clientX: number) => {
+    const audio = audioRef.current;
+    const waveform = waveformRef.current;
+    if (!audio || !waveform || !duration) return;
+
+    const rect = waveform.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    audio.currentTime = duration * ratio;
+    setCurrentTime(audio.currentTime);
+  };
+
+  const progressRatio = duration > 0 ? currentTime / duration : 0;
+  const shownTime = isPlaying ? currentTime : duration;
+
+  return (
+    <div className="voice-message-player">
+      <audio ref={audioRef} preload="metadata" src={src} />
+      <button type="button" className="voice-message-play" onClick={() => void togglePlayback()}>
+        {isPlaying ? <Pause size={18} /> : <Play size={18} />}
+      </button>
+      <div className="voice-message-main">
+        <div
+          ref={waveformRef}
+          className="voice-message-wave"
+          onClick={(event) => seekAudio(event.clientX)}
+        >
+          {bars.map((height, index) => {
+            const active = index / bars.length <= progressRatio;
+            return (
+              <span
+                key={`${seed}-${index}`}
+                className={`voice-message-bar ${active ? "active" : ""}`}
+                style={{ height: `${height}px` }}
+              />
+            );
+          })}
+        </div>
+        <div className="voice-message-time">{formatAudioClock(shownTime)}</div>
+      </div>
+    </div>
+  );
+}
+
+type CallNoticeKind = "rejected" | "ended" | "started";
+
+type CallNoticeMeta = {
+  kind: CallNoticeKind;
+  title: string;
+  detail: string | null;
+};
+
+function getCallNoticeMeta(message: UiMessage): CallNoticeMeta | null {
+  if (message.msgtype !== MsgType.Notice) return null;
+
+  const text = message.text.trim();
+  if (!text) return null;
+
+  if (text === "Qo'ng'iroq rad etildi") {
+    return { kind: "rejected", title: "Rejected Call", detail: null };
+  }
+
+  if (text === "Audio qo'ng'iroq boshlandi") {
+    return { kind: "started", title: "Call Started", detail: null };
+  }
+
+  if (text.startsWith("Audio qo'ng'iroq tugadi.")) {
+    const durationMatch = text.match(/Davomiyligi:\s*(.+)$/i);
+    return {
+      kind: "ended",
+      title: "Call Ended",
+      detail: durationMatch?.[1] ?? null,
+    };
+  }
+
+  return null;
+}
+
+function renderCallNoticeIcon(kind: CallNoticeKind) {
+  if (kind === "rejected") return <PhoneMissed size={18} />;
+  if (kind === "ended") return <Clock3 size={18} />;
+  return <PhoneCall size={18} />;
+}
 
 export function ChatWindow({
   roomId,
@@ -425,6 +587,8 @@ export function ChatWindow({
           const mediaUrl = mediaHttpByMessageId.get(message.id);
           const isSelected = selectedMessageIdSet.has(message.id);
           const isPinned = Boolean(message.eventId && pinnedEventIdSet.has(message.eventId));
+          const callNotice = getCallNoticeMeta(message);
+          const shouldRenderTextBody = !callNotice && kind === "text";
 
           return (
             <div
@@ -437,7 +601,7 @@ export function ChatWindow({
                   messageRefs.current.delete(message.eventId);
                 }
               }}
-              className={`msg ${message.sender === myUserId ? "me" : ""} ${selectionMode ? "selecting" : ""} ${isSelected ? "selected" : ""} ${message.eventId === highlightedEventId ? "jump-highlight" : ""}`}
+              className={`msg ${message.sender === myUserId ? "me" : ""} ${callNotice ? "system-call" : ""} ${selectionMode ? "selecting" : ""} ${isSelected ? "selected" : ""} ${message.eventId === highlightedEventId ? "jump-highlight" : ""}`}
               data-event-id={message.eventId ?? undefined}
               onContextMenu={(event) => {
                 if (selectionMode) return;
@@ -460,24 +624,38 @@ export function ChatWindow({
             >
               {selectionMode && <div className="msg-select-indicator">{isSelected ? "✓" : ""}</div>}
 
-              <div className="msg-meta">
-                <div className="msg-sender-wrap">
-                  <div className="msg-sender">{message.sender}</div>
-                  {isPinned && <span className="msg-pinned-badge">Pinned</span>}
+              {callNotice ? (
+                <div className={`call-notice-card ${callNotice.kind}`}>
+                  <div className="call-notice-icon">{renderCallNoticeIcon(callNotice.kind)}</div>
+                  <div className="call-notice-content">
+                    <div className="call-notice-title">{callNotice.title}</div>
+                    <div className="call-notice-meta">
+                      {callNotice.detail && <span>{callNotice.detail}</span>}
+                      {callNotice.detail && <span className="call-notice-separator">•</span>}
+                      <span>{formatMessageTime(message.ts)}</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="msg-time">
-                  {formatMessageTime(message.ts)}
-                  {message.edited && <span className="msg-edited">edited</span>}
+              ) : (
+                <div className="msg-meta">
+                  <div className="msg-sender-wrap">
+                    <div className="msg-sender">{message.sender}</div>
+                    {isPinned && <span className="msg-pinned-badge">Pinned</span>}
+                  </div>
+                  <div className="msg-time">
+                    {formatMessageTime(message.ts)}
+                    {message.edited && <span className="msg-edited">edited</span>}
+                  </div>
                 </div>
-              </div>
+              )}
 
-              {message.forwardedFrom && (
+              {!callNotice && message.forwardedFrom && (
                 <div className="msg-forwarded">
                   Forwarded from {message.forwardedFrom.sender}
                 </div>
               )}
 
-              {message.replyTo && (
+              {!callNotice && message.replyTo && (
                 <button
                   type="button"
                   className={`msg-reply-preview ${activeReplyMessageId === message.id ? "active" : ""}`}
@@ -491,7 +669,7 @@ export function ChatWindow({
                 </button>
               )}
 
-              {kind === "image" && mediaUrl && (
+              {!callNotice && kind === "image" && mediaUrl && (
                 <img
                   className="msg-media msg-image"
                   src={mediaUrl}
@@ -499,25 +677,40 @@ export function ChatWindow({
                   loading="lazy"
                 />
               )}
-              {kind === "video" && mediaUrl && (
+              {!callNotice && kind === "video" && mediaUrl && (
                 <video className="msg-media msg-video" controls src={mediaUrl} />
               )}
-              {kind === "audio" && mediaUrl && (
-                <audio className="msg-media msg-audio" controls src={mediaUrl} />
+              {!callNotice && kind === "audio" && mediaUrl && (
+                <div className="msg-audio-card">
+                  <AudioMessagePlayer src={mediaUrl} seed={message.id} />
+                  <div className="msg-audio-subtitle">
+                    <AudioLines size={14} />
+                    {formatBytes(message.mediaSize) || "Voice note"}
+                  </div>
+                </div>
               )}
-              {kind === "file" && mediaUrl && (
+              {!callNotice && kind === "file" && mediaUrl && (
                 <a
-                  className="msg-file-link"
+                  className="msg-file-card"
                   href={mediaUrl}
                   target="_blank"
                   rel="noreferrer"
                   download
                 >
-                  Download file {formatBytes(message.mediaSize)}
+                  <div className="msg-file-icon">
+                    <FileText size={18} />
+                  </div>
+                  <div className="msg-file-body">
+                    <div className="msg-file-title">{getAttachmentTitle(message, "File")}</div>
+                    <div className="msg-file-subtitle">{formatBytes(message.mediaSize) || "Attachment"}</div>
+                  </div>
+                  <div className="msg-file-download">
+                    <Download size={16} />
+                  </div>
                 </a>
               )}
 
-              {editingMessageId === message.id ? (
+              {!callNotice && editingMessageId === message.id ? (
                 <div className="msg-edit-row">
                   <input
                     className="input"
@@ -545,16 +738,16 @@ export function ChatWindow({
                     Cancel
                   </button>
                 </div>
-              ) : (
+              ) : shouldRenderTextBody ? (
                 <div
                   className="msg-text"
                   dangerouslySetInnerHTML={{
                     __html: message.formattedBody ?? formatMessageTextToHtml(message.text),
                   }}
                 />
-              )}
+              ) : null}
 
-              {message.reactions.length > 0 && (
+              {!callNotice && message.reactions.length > 0 && (
                 <div className="msg-reactions">
                   {message.reactions.map((reaction) => (
                     <button

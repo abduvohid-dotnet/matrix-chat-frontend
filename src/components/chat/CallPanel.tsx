@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
-import { CallState, CallType } from "matrix-js-sdk/lib/webrtc/call";
-import { Mic, MicOff, Phone, PhoneOff, Video, VideoOff } from "lucide-react";
+import { CallState } from "matrix-js-sdk/lib/webrtc/call";
+import { Mic, MicOff, Phone, PhoneOff } from "lucide-react";
 
 function bindStream(element: HTMLMediaElement | null, stream: MediaStream | null, muted: boolean) {
   if (!element) return;
@@ -29,33 +29,26 @@ export function CallPanel({
   localStream,
   remoteStream,
   state,
-  type,
   incoming,
   micMuted,
-  videoMuted,
   error,
   onAnswer,
   onReject,
   onHangup,
   onToggleMicrophone,
-  onToggleVideo,
 }: {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
   state: CallState | null;
-  type: CallType | null;
   incoming: boolean;
   micMuted: boolean;
-  videoMuted: boolean;
   error: string | null;
   onAnswer: () => void;
   onReject: () => void;
   onHangup: () => void;
   onToggleMicrophone: () => void;
-  onToggleVideo: () => void;
 }) {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
@@ -63,29 +56,18 @@ export function CallPanel({
   }, [localStream]);
 
   useEffect(() => {
-    bindStream(remoteVideoRef.current, remoteStream, false);
     bindStream(remoteAudioRef.current, remoteStream, false);
   }, [remoteStream]);
-
-  const isVideo = type === CallType.Video;
 
   return (
     <div className="call-panel">
       <div className="call-stage">
-        {isVideo ? (
-          remoteStream ? (
-            <video ref={remoteVideoRef} className="call-remote-video" autoPlay playsInline />
-          ) : (
-            <div className="call-avatar">{incoming ? "Incoming video call" : "Starting video call"}</div>
-          )
-        ) : (
-          <div className="call-avatar">{incoming ? "Incoming voice call" : "Voice call"}</div>
-        )}
+        <div className="call-avatar">{incoming ? "Incoming voice call" : "Voice call"}</div>
         <audio ref={remoteAudioRef} autoPlay playsInline />
         {localStream && (
           <video
             ref={localVideoRef}
-            className={`call-local-video ${videoMuted || !isVideo ? "audio-only" : ""}`}
+            className="call-local-video audio-only"
             autoPlay
             playsInline
           />
@@ -115,12 +97,6 @@ export function CallPanel({
               {micMuted ? <MicOff size={16} /> : <Mic size={16} />}
               {micMuted ? "Unmute" : "Mute"}
             </button>
-            {isVideo && (
-              <button type="button" className="btn ghost call-btn" onClick={() => void onToggleVideo()}>
-                {videoMuted ? <VideoOff size={16} /> : <Video size={16} />}
-                {videoMuted ? "Camera on" : "Camera off"}
-              </button>
-            )}
             <button type="button" className="btn ghost call-btn danger" onClick={onHangup}>
               <PhoneOff size={16} />
               End

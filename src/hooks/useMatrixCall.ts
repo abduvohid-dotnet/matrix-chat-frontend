@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CallEvent, ClientEvent, type MatrixEvent } from "matrix-js-sdk";
+import { CallEvent, ClientEvent, EventType, MsgType, type MatrixEvent } from "matrix-js-sdk";
 import { CallErrorCode, CallState, CallType, type MatrixCall } from "matrix-js-sdk/lib/webrtc/call";
 import { CallEventHandlerEvent } from "matrix-js-sdk/lib/webrtc/callEventHandler";
 import { useMatrix } from "../app/providers/useMatrix";
@@ -14,7 +14,6 @@ type UseMatrixCallState = {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
   micMuted: boolean;
-  videoMuted: boolean;
   error: string | null;
 };
 
@@ -27,7 +26,6 @@ const INITIAL_STATE: UseMatrixCallState = {
   localStream: null,
   remoteStream: null,
   micMuted: false,
-  videoMuted: false,
   error: null,
 };
 
@@ -37,6 +35,13 @@ type StoredCallMeta = {
   roomId: string;
   type: CallType | null;
   incoming: boolean;
+};
+
+type CallLogState = {
+  roomId: string | null;
+  incoming: boolean;
+  connectedAt: number | null;
+  endedLogged: boolean;
 };
 
 function inferCallTypeFromInvite(content: Record<string, unknown>): CallType | null {
@@ -88,14 +93,28 @@ function clearStoredCallMeta(): void {
   }
 }
 
+function formatCallDuration(durationMs: number): string {
+  const totalSeconds = Math.max(1, Math.round(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
 export function useMatrixCall() {
   const { client } = useMatrix();
   const [callState, setCallState] = useState<UseMatrixCallState>(INITIAL_STATE);
   const cleanupRef = useRef<(() => void) | null>(null);
   const activeCallRef = useRef<MatrixCall | null>(null);
+  const recoverTimeoutRef = useRef<number | null>(null);
   const lastErrorRef = useRef<string | null>(null);
   const previousStateRef = useRef<CallState | null>(null);
   const audioRef = useRef<CallAudioController | null>(null);
+  const callLogRef = useRef<CallLogState>({
+    roomId: null,
+    incoming: false,
+    connectedAt: null,
+    endedLogged: false,
+  });
 
   if (!audioRef.current) {
     audioRef.current = new CallAudioController();
@@ -107,13 +126,70 @@ export function useMatrixCall() {
     activeCallRef.current = null;
   }, []);
 
+  const clearRecoverTimeout = useCallback(() => {
+    if (recoverTimeoutRef.current === null || typeof window === "undefined") return;
+    window.clearTimeout(recoverTimeoutRef.current);
+    recoverTimeoutRef.current = null;
+  }, []);
+
+  const sendCallNotice = useCallback(
+    async (roomId: string, body: string) => {
+      if (!client) return;
+
+      await client.sendEvent(roomId, EventType.RoomMessage, {
+        msgtype: MsgType.Notice,
+        body,
+      });
+    },
+    [client],
+  );
+
+  const resetCallLog = useCallback(() => {
+    callLogRef.current = {
+      roomId: null,
+      incoming: false,
+      connectedAt: null,
+      endedLogged: false,
+    };
+  }, []);
+
+  const primeCallLog = useCallback((call: MatrixCall, incoming: boolean) => {
+    callLogRef.current = {
+      roomId: call.roomId,
+      incoming,
+      connectedAt: null,
+      endedLogged: false,
+    };
+  }, []);
+
+  const markConnectedCall = useCallback((call: MatrixCall) => {
+    const session = callLogRef.current;
+    if (session.roomId !== call.roomId || session.connectedAt) return;
+    session.connectedAt = Date.now();
+  }, []);
+
+  const logCompletedCall = useCallback(
+    (call: MatrixCall) => {
+      const session = callLogRef.current;
+      if (session.roomId !== call.roomId || session.incoming || session.endedLogged || !session.connectedAt) {
+        return;
+      }
+
+      session.endedLogged = true;
+      void sendCallNotice(call.roomId, `Audio qo'ng'iroq tugadi. Davomiyligi: ${formatCallDuration(Date.now() - session.connectedAt)}`);
+    },
+    [sendCallNotice],
+  );
+
   const resetCallState = useCallback(() => {
+    clearRecoverTimeout();
     detachActiveCall();
     lastErrorRef.current = null;
     clearStoredCallMeta();
+    resetCallLog();
     setCallState(INITIAL_STATE);
     audioRef.current?.stop();
-  }, [detachActiveCall]);
+  }, [clearRecoverTimeout, detachActiveCall, resetCallLog]);
 
   const syncFromCall = useCallback((call: MatrixCall, incoming: boolean, error?: string | null) => {
     if (error !== undefined) {
@@ -135,13 +211,16 @@ export function useMatrixCall() {
       localStream: call.localUsermediaStream ?? null,
       remoteStream: call.remoteUsermediaStream ?? null,
       micMuted: call.isMicrophoneMuted(),
-      videoMuted: call.isLocalVideoMuted(),
       error: error ?? null,
     });
   }, []);
 
   const showCallPlaceholder = useCallback((meta: StoredCallMeta, state: CallState, error?: string | null) => {
-    writeStoredCallMeta(meta);
+    if (state === CallState.Ended) {
+      clearStoredCallMeta();
+    } else {
+      writeStoredCallMeta(meta);
+    }
     if (error !== undefined) {
       lastErrorRef.current = error;
     }
@@ -155,10 +234,19 @@ export function useMatrixCall() {
       localStream: null,
       remoteStream: null,
       micMuted: false,
-      videoMuted: false,
       error: error ?? prev.error ?? null,
     }));
   }, []);
+
+  const scheduleRecoverCleanup = useCallback(() => {
+    if (typeof window === "undefined") return;
+    clearRecoverTimeout();
+    recoverTimeoutRef.current = window.setTimeout(() => {
+      if (activeCallRef.current) return;
+      if (!readStoredCallMeta()) return;
+      resetCallState();
+    }, 2500);
+  }, [clearRecoverTimeout, resetCallState]);
 
   const getExistingActiveCall = useCallback((): MatrixCall | null => {
     const rawClient = client as (typeof client & {
@@ -209,7 +297,6 @@ export function useMatrixCall() {
       localStream: null,
       remoteStream: null,
       micMuted: false,
-      videoMuted: false,
       error: prev.error ?? lastErrorRef.current ?? "Call sessionni tiklash kutilmoqda",
     }));
   }, []);
@@ -221,15 +308,21 @@ export function useMatrixCall() {
         return;
       }
 
+      clearRecoverTimeout();
       cleanupRef.current?.();
       activeCallRef.current = call;
+      primeCallLog(call, incoming);
       syncFromCall(call, incoming, null);
 
       const isActiveCall = () => activeCallRef.current === call;
 
       const onState = (state: CallState) => {
         if (!isActiveCall()) return;
+        if (state === CallState.Connected) {
+          markConnectedCall(call);
+        }
         if (state === CallState.Ended) {
+          logCompletedCall(call);
           detachActiveCall();
           if (lastErrorRef.current) {
             showCallPlaceholder(
@@ -253,6 +346,7 @@ export function useMatrixCall() {
 
       const onHangup = () => {
         if (!isActiveCall()) return;
+        logCompletedCall(call);
         resetCallState();
       };
 
@@ -285,7 +379,7 @@ export function useMatrixCall() {
         call.off(CallEvent.Replaced, onReplaced);
       };
     },
-    [callState.error, detachActiveCall, resetCallState, showCallPlaceholder, syncFromCall],
+    [callState.error, clearRecoverTimeout, detachActiveCall, logCompletedCall, markConnectedCall, primeCallLog, resetCallState, showCallPlaceholder, syncFromCall],
   );
 
   useEffect(() => {
@@ -295,10 +389,15 @@ export function useMatrixCall() {
       return;
     }
 
-    const recoverExistingCall = () => {
+    const recoverExistingCall = (clearIfMissing = false) => {
       const existingCall = getExistingActiveCall();
       if (!existingCall) {
+        if (clearIfMissing && readStoredCallMeta()) {
+          resetCallState();
+          return;
+        }
         hydrateStoredCallMeta();
+        scheduleRecoverCleanup();
         return;
       }
       const isIncoming = existingCall.direction !== undefined
@@ -338,15 +437,19 @@ export function useMatrixCall() {
     };
 
     recoverExistingCall();
+    const onSync = () => {
+      recoverExistingCall(true);
+    };
+
     client.on(CallEventHandlerEvent.Incoming, onIncoming);
-    client.on(ClientEvent.Sync, recoverExistingCall);
+    client.on(ClientEvent.Sync, onSync);
     client.on(ClientEvent.ReceivedVoipEvent, onVoipEvent);
     return () => {
       client.off(CallEventHandlerEvent.Incoming, onIncoming);
-      client.off(ClientEvent.Sync, recoverExistingCall);
+      client.off(ClientEvent.Sync, onSync);
       client.off(ClientEvent.ReceivedVoipEvent, onVoipEvent);
     };
-  }, [attachCall, callState.incoming, callState.roomId, client, detachActiveCall, getExistingActiveCall, hydrateStoredCallMeta, preserveStoredCallMeta, resetCallState, showCallPlaceholder]);
+  }, [attachCall, callState.incoming, callState.roomId, client, detachActiveCall, getExistingActiveCall, hydrateStoredCallMeta, preserveStoredCallMeta, resetCallState, scheduleRecoverCleanup, showCallPlaceholder]);
 
   useEffect(() => {
     const previousState = previousStateRef.current;
@@ -356,10 +459,11 @@ export function useMatrixCall() {
 
   useEffect(() => {
     return () => {
+      clearRecoverTimeout();
       cleanupRef.current?.();
       audioRef.current?.destroy();
     };
-  }, []);
+  }, [clearRecoverTimeout]);
 
   const startVoiceCall = useCallback(
     async (roomId: string) => {
@@ -383,33 +487,11 @@ export function useMatrixCall() {
     [attachCall, client, showCallPlaceholder],
   );
 
-  const startVideoCall = useCallback(
-    async (roomId: string) => {
-      if (!client || !roomId) return;
-
-      void audioRef.current?.unlock();
-      const call = client.createCall(roomId);
-      if (!call) {
-        setCallState((prev) => ({ ...prev, error: "Browser call support mavjud emas" }));
-        return;
-      }
-
-      attachCall(call, false);
-      try {
-        await call.placeVideoCall();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Video call boshlanmadi";
-        showCallPlaceholder({ roomId, type: CallType.Video, incoming: false }, CallState.Ended, message);
-      }
-    },
-    [attachCall, client, showCallPlaceholder],
-  );
-
   const answer = useCallback(async () => {
     const call = activeCallRef.current;
     if (!call) return;
     void audioRef.current?.unlock();
-    await call.answer(true, call.type === CallType.Video);
+    await call.answer(true, false);
     syncFromCall(call, false, null);
   }, [syncFromCall]);
 
@@ -419,9 +501,10 @@ export function useMatrixCall() {
       resetCallState();
       return;
     }
+    void sendCallNotice(call.roomId, "Qo'ng'iroq rad etildi");
     call.reject();
     resetCallState();
-  }, [resetCallState]);
+  }, [resetCallState, sendCallNotice]);
 
   const hangup = useCallback(() => {
     const call = activeCallRef.current;
@@ -440,22 +523,13 @@ export function useMatrixCall() {
     syncFromCall(call, callState.incoming, callState.error);
   }, [callState.error, callState.incoming, syncFromCall]);
 
-  const toggleVideo = useCallback(async () => {
-    const call = activeCallRef.current;
-    if (!call) return;
-    await call.setLocalVideoMuted(!call.isLocalVideoMuted());
-    syncFromCall(call, callState.incoming, callState.error);
-  }, [callState.error, callState.incoming, syncFromCall]);
-
   return {
     ...callState,
     startVoiceCall,
-    startVideoCall,
     answer,
     reject,
     hangup,
     toggleMicrophone,
-    toggleVideo,
     inCall: Boolean(callState.call || callState.roomId),
   };
 }
