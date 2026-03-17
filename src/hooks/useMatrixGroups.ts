@@ -20,6 +20,11 @@ export type GroupMemberSummary = {
   membership: string;
   powerLevel: number;
   isCreator: boolean;
+  isSelf: boolean;
+  avatarUrl: string | null;
+  statusText: string;
+  statusTone: "online" | "offline" | "invited";
+  canRemove: boolean;
 };
 
 const ROOM_STATE_EVENTS = "RoomState.events";
@@ -93,6 +98,56 @@ function getMemberPowerLevel(room: Room | null, userId: string | null, powerLeve
   return powerLevels.users?.[userId] ?? powerLevels.users_default ?? 0;
 }
 
+function getMemberStatus(
+  client: ReturnType<typeof useMatrix>["client"],
+  userId: string,
+  membership: string,
+  typing: boolean,
+): { text: string; tone: "online" | "offline" | "invited" } {
+  if (membership === "invite") {
+    return { text: "invited", tone: "invited" };
+  }
+
+  if (typing) {
+    return { text: "typing...", tone: "online" };
+  }
+
+  const user = client?.getUser(userId);
+  if (user?.presence === "online") {
+    return { text: "online", tone: "online" };
+  }
+
+  if (user?.presence === "unavailable") {
+    return { text: "away", tone: "offline" };
+  }
+
+  return { text: "last seen recently", tone: "offline" };
+}
+
+function getMemberAvatarUrl(
+  client: ReturnType<typeof useMatrix>["client"],
+  room: Room | null,
+  userId: string,
+): string | null {
+  if (!client || !room) return null;
+
+  const avatarMxc = room.getMember(userId)?.events.member?.getContent()?.avatar_url;
+  if (typeof avatarMxc !== "string" || !avatarMxc) return null;
+
+  return client.mxcUrlToHttp(avatarMxc, 96, 96, "crop") ?? client.mxcUrlToHttp(avatarMxc) ?? null;
+}
+
+function canRemoveMember(
+  actorLevel: number,
+  targetLevel: number,
+  kickLevel: number,
+  options: { isCreator: boolean; isSelf: boolean },
+): boolean {
+  if (options.isCreator || options.isSelf) return false;
+  if (actorLevel < kickLevel) return false;
+  return actorLevel > targetLevel;
+}
+
 export function useMatrixGroups(roomId: string | null) {
   const { client, auth } = useMatrix();
   const [stateVersion, bumpVersion] = useReducer((value: number) => value + 1, 0);
@@ -137,20 +192,34 @@ export function useMatrixGroups(roomId: string | null) {
   }, [auth, powerLevels, room]);
 
   const members = useMemo<GroupMemberSummary[]>(() => {
-    if (!room) return [];
+    if (!room || !auth) return [];
+
+    const kickLevel = powerLevels.kick ?? 75;
 
     return room
       .getMembers()
       .filter((member) => member.membership === "join" || member.membership === "invite")
-      .map((member) => ({
-        userId: member.userId,
-        displayName: member.rawDisplayName || member.userId,
-        membership: member.membership ?? "leave",
-        powerLevel: getMemberPowerLevel(room, member.userId, powerLevels),
-        isCreator: creatorUserId === member.userId,
-      }))
+      .map((member) => {
+        const status = getMemberStatus(client, member.userId, member.membership ?? "leave", Boolean(member.typing));
+        const powerLevel = getMemberPowerLevel(room, member.userId, powerLevels);
+        const isCreator = creatorUserId === member.userId;
+        const isSelf = auth.userId === member.userId;
+
+        return {
+          userId: member.userId,
+          displayName: member.rawDisplayName || member.userId,
+          membership: member.membership ?? "leave",
+          powerLevel,
+          isCreator,
+          isSelf,
+          avatarUrl: getMemberAvatarUrl(client, room, member.userId),
+          statusText: status.text,
+          statusTone: status.tone,
+          canRemove: canRemoveMember(myPowerLevel, powerLevel, kickLevel, { isCreator, isSelf }),
+        };
+      })
       .sort((a, b) => b.powerLevel - a.powerLevel || a.displayName.localeCompare(b.displayName));
-  }, [creatorUserId, powerLevels, room]);
+  }, [auth, client, creatorUserId, myPowerLevel, powerLevels, room]);
 
   const createGroup = useCallback(
     async (name: string, inviteInput: string) => {
@@ -270,7 +339,41 @@ export function useMatrixGroups(roomId: string | null) {
     [client, optimisticPowerLevelsByRoom],
   );
 
+  const removeMember = useCallback(
+    async (targetRoomId: string, userId: string) => {
+      if (!client || !auth) {
+        throw new Error("Matrix client is not ready");
+      }
+
+      const targetRoom = client.getRoom(targetRoomId);
+      const current = optimisticPowerLevelsByRoom[targetRoomId] ?? getPowerLevelsState(targetRoom);
+      const actorLevel = getMemberPowerLevel(targetRoom, auth.userId, current);
+      const targetLevel = getMemberPowerLevel(targetRoom, userId, current);
+      const targetIsCreator = getCreatorUserId(targetRoom) === userId;
+      const isSelf = auth.userId === userId;
+
+      if (!canRemoveMember(actorLevel, targetLevel, current.kick ?? 75, { isCreator: targetIsCreator, isSelf })) {
+        throw new Error("You do not have permission to remove this member");
+      }
+
+      await client.kick(targetRoomId, userId, "Removed from group");
+    },
+    [auth, client, optimisticPowerLevelsByRoom],
+  );
+
+  const leaveRoom = useCallback(
+    async (targetRoomId: string) => {
+      if (!client) {
+        throw new Error("Matrix client is not ready");
+      }
+
+      await client.leave(targetRoomId);
+    },
+    [client],
+  );
+
   return {
+    roomName: room?.name || "Unnamed group",
     members,
     creatorUserId,
     myPowerLevel,
@@ -279,5 +382,7 @@ export function useMatrixGroups(roomId: string | null) {
     inviteUsers,
     setMemberPowerLevel,
     updatePermissionLevels,
+    removeMember,
+    leaveRoom,
   };
 }

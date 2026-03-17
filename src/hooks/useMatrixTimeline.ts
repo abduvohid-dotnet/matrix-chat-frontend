@@ -13,6 +13,7 @@ export type UiMessage = {
   eventId: string | null;
   canRedact: boolean;
   sender: string;
+  senderDisplayName: string;
   text: string;
   formattedBody: string | null;
   ts: number;
@@ -94,6 +95,12 @@ type MessageInfo = {
   size?: unknown;
 };
 
+type RoomPowerLevelsContent = {
+  users?: Record<string, number>;
+  users_default?: number;
+  redact?: number;
+};
+
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -124,6 +131,44 @@ function hasLocalRedaction(event: MatrixEvent): boolean {
 function getRedactedEventId(event: MatrixEvent): string | null {
   const raw = event as MatrixEvent & { event?: { redacts?: unknown } };
   return asString(raw.event?.redacts);
+}
+
+function getPowerLevelsState(room: Room | null): RoomPowerLevelsContent {
+  const content = room?.currentState.getStateEvents(EventType.RoomPowerLevels, "")?.getContent() as
+    | RoomPowerLevelsContent
+    | undefined;
+
+  return {
+    users_default: 0,
+    redact: 50,
+    users: {},
+    ...content,
+  };
+}
+
+function getCreatorUserId(room: Room | null): string | null {
+  const createContent = room?.currentState.getStateEvents(EventType.RoomCreate, "")?.getContent() as
+    | { creator?: unknown }
+    | undefined;
+
+  return typeof createContent?.creator === "string" && createContent.creator.length > 0
+    ? createContent.creator
+    : null;
+}
+
+function getMemberPowerLevel(room: Room | null, userId: string | null, powerLevels: RoomPowerLevelsContent): number {
+  if (!room || !userId) return powerLevels.users_default ?? 0;
+
+  const member = room.getMember(userId);
+  if (member && typeof member.powerLevel === "number") {
+    return Number.isFinite(member.powerLevel) ? member.powerLevel : 100;
+  }
+
+  if (getCreatorUserId(room) === userId) {
+    return 100;
+  }
+
+  return powerLevels.users?.[userId] ?? powerLevels.users_default ?? 0;
 }
 
 export function useMatrixTimeline(roomId: string | null) {
@@ -158,6 +203,8 @@ export function useMatrixTimeline(roomId: string | null) {
 
   const events = room.getLiveTimeline().getEvents();
   const myUserId = auth?.userId ?? null;
+  const powerLevels = getPowerLevelsState(room);
+  const myPowerLevel = getMemberPowerLevel(room, myUserId, powerLevels);
 
   const replacements = new Map<string, Replacement>();
   const reactionsByEvent = new Map<string, Map<string, UiReaction>>();
@@ -272,12 +319,19 @@ export function useMatrixTimeline(roomId: string | null) {
       const mediaSize = info ? asNumber(info.size) : null;
       const reactionsMap = eventId ? reactionsByEvent.get(eventId) : undefined;
       const forwardedFrom = content[FORWARDED_FROM_KEY];
+      const sender = event.getSender() ?? "unknown";
+      const senderDisplayName = room.getMember(sender)?.rawDisplayName || sender;
+      const senderPowerLevel = getMemberPowerLevel(room, sender, powerLevels);
+      const canRedact =
+        Boolean(eventId) &&
+        (sender === myUserId || (myPowerLevel >= (powerLevels.redact ?? 50) && myPowerLevel > senderPowerLevel));
 
       return {
         id: eventId ?? `${event.getTs()}-${event.getSender()}`,
         eventId: eventId ?? null,
-        canRedact: Boolean(eventId),
-        sender: event.getSender() ?? "unknown",
+        canRedact,
+        sender,
+        senderDisplayName,
         text: body,
         formattedBody: formattedBody ? sanitizeFormattedHtml(formattedBody) : null,
         ts: event.getTs(),

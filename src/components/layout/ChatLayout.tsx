@@ -49,6 +49,7 @@ export function ChatLayout() {
   const { messages } = useMatrixTimeline(selectedRoomId);
   const { pinnedEventIds, pinMessage, unpinMessage } = useMatrixPins(selectedRoomId);
   const {
+    roomName: groupRoomName,
     members: groupMembers,
     myPowerLevel,
     powerLevels,
@@ -56,6 +57,8 @@ export function ChatLayout() {
     inviteUsers,
     setMemberPowerLevel,
     updatePermissionLevels,
+    removeMember,
+    leaveRoom,
   } = useMatrixGroups(selectedRoomId);
   const { typingText, presenceText, online } = useMatrixRoomStatus(selectedRoomId);
   const { createOrGetDirectRoom } = useMatrixDirectRoom();
@@ -68,11 +71,8 @@ export function ChatLayout() {
     [messages, selectedMessageIds],
   );
   const deletableSelectedMessages = useMemo(
-    () =>
-      selectedMessages.filter(
-        (message) => message.sender === auth?.userId && message.canRedact && Boolean(message.eventId),
-      ),
-    [auth?.userId, selectedMessages],
+    () => selectedMessages.filter((message) => message.canRedact && Boolean(message.eventId)),
+    [selectedMessages],
   );
   const pinnedMessages = useMemo(
     () =>
@@ -82,6 +82,19 @@ export function ChatLayout() {
     [messages, pinnedEventIds],
   );
   const latestPinnedMessage = pinnedMessages[0] ?? null;
+  const showSenderNames = useMemo(
+    () => Math.max(selectedRoom?.getJoinedMemberCount() ?? 0, groupMembers.length) > 2,
+    [groupMembers.length, selectedRoom],
+  );
+  const groupStats = useMemo(
+    () => ({
+      photos: messages.filter((message) => message.msgtype === "m.image").length,
+      files: messages.filter((message) => message.msgtype === "m.file").length,
+      links: messages.filter((message) => /(https?:\/\/|www\.)/i.test(message.text)).length,
+      voices: messages.filter((message) => message.msgtype === "m.audio").length,
+    }),
+    [messages],
+  );
 
   useEffect(() => {
     if (!rooms.length) {
@@ -204,6 +217,23 @@ export function ChatLayout() {
       await action();
     } catch (error: unknown) {
       setGroupManageError(error instanceof Error ? error.message : "Group update failed");
+    } finally {
+      setGroupManageBusy(false);
+    }
+  };
+
+  const onLeaveGroup = async () => {
+    if (!selectedRoomId) return;
+
+    setGroupManageBusy(true);
+    setGroupManageError(null);
+    try {
+      await leaveRoom(selectedRoomId);
+      setGroupManageOpen(false);
+      setAutoSelectEnabled(true);
+      setSelectedRoomId(null);
+    } catch (error: unknown) {
+      setGroupManageError(error instanceof Error ? error.message : "Leave group failed");
     } finally {
       setGroupManageBusy(false);
     }
@@ -483,15 +513,21 @@ export function ChatLayout() {
               )}
               {groupManageOpen && selectedRoomId && (
                 <GroupManagementPanel
+                  roomName={groupRoomName || selectedRoom?.name || selectedRoomId}
+                  roomId={selectedRoomId}
                   members={groupMembers}
                   myPowerLevel={myPowerLevel}
                   inviteLevel={powerLevels.invite ?? 50}
                   redactLevel={powerLevels.redact ?? 50}
                   kickLevel={powerLevels.kick ?? 75}
                   banLevel={powerLevels.ban ?? 75}
+                  stats={groupStats}
                   busy={groupManageBusy}
                   error={groupManageError}
+                  onClose={() => setGroupManageOpen(false)}
+                  onLeave={onLeaveGroup}
                   onInvite={(value) => runGroupAction(() => inviteUsers(selectedRoomId, value))}
+                  onRemoveMember={(userId) => runGroupAction(() => removeMember(selectedRoomId, userId))}
                   onChangeRole={(userId, value) =>
                     runGroupAction(() => setMemberPowerLevel(selectedRoomId, userId, value))
                   }
@@ -518,6 +554,7 @@ export function ChatLayout() {
                 roomId={selectedRoomId}
                 messages={messages}
                 myUserId={auth.userId}
+                showSenderNames={showSenderNames}
                 onReply={onReply}
                 onForward={onForward}
                 onPin={onPin}

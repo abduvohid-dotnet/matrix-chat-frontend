@@ -51,6 +51,16 @@ function clampText(value: string, maxLength = 90): string {
   return `${value.slice(0, maxLength - 3)}...`;
 }
 
+function getSenderAccent(seed: string): string {
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = (hash * 33 + seed.charCodeAt(index)) >>> 0;
+  }
+
+  const hue = hash % 360;
+  return `hsl(${hue} 62% 46%)`;
+}
+
 function getAttachmentTitle(message: UiMessage, fallback: string): string {
   const text = message.text.trim();
   return text || fallback;
@@ -227,6 +237,7 @@ export function ChatWindow({
   roomId,
   messages,
   myUserId,
+  showSenderNames,
   onReply,
   onForward,
   onPin,
@@ -243,6 +254,7 @@ export function ChatWindow({
   roomId: string;
   messages: UiMessage[];
   myUserId: string;
+  showSenderNames: boolean;
   onReply: (message: UiMessage) => void;
   onForward: (message: UiMessage) => void;
   onPin: (message: UiMessage) => void;
@@ -466,7 +478,7 @@ export function ChatWindow({
 
   const onDelete = async (message: UiMessage) => {
     if (!message.canRedact) {
-      setDeleteError("Message hali sync bo'lmagan. 1-2 soniya kutib qayta urinib ko'ring.");
+      setDeleteError("Siz bu message'ni o'chira olmaysiz.");
       return;
     }
 
@@ -639,7 +651,16 @@ export function ChatWindow({
               ) : (
                 <div className="msg-meta">
                   <div className="msg-sender-wrap">
-                    <div className="msg-sender">{message.sender}</div>
+                    {showSenderNames && message.sender !== myUserId ? (
+                      <div
+                        className="msg-sender"
+                        style={{ color: getSenderAccent(message.senderDisplayName) }}
+                      >
+                        {message.senderDisplayName}
+                      </div>
+                    ) : (
+                      <span />
+                    )}
                     {isPinned && <span className="msg-pinned-badge">Pinned</span>}
                   </div>
                   <div className="msg-time">
@@ -842,14 +863,14 @@ export function ChatWindow({
                   Edit
                 </button>
               )}
-              {contextMenuMessage.sender === myUserId && (
+              {contextMenuMessage.canRedact && (
                 <button
                   type="button"
                   className="msg-context-item danger"
                   onClick={() => void onDelete(contextMenuMessage)}
-                  disabled={loadingMessageId === contextMenuMessage.id || !contextMenuMessage.canRedact}
+                  disabled={loadingMessageId === contextMenuMessage.id}
                 >
-                  {contextMenuMessage.canRedact ? "Delete" : "Syncing..."}
+                  Delete
                 </button>
               )}
             </div>
