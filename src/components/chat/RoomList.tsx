@@ -1,9 +1,16 @@
-import type { Room } from "matrix-js-sdk";
+import { useEffect, useReducer } from "react";
+import { RoomMemberEvent, UserEvent, type Room } from "matrix-js-sdk";
 import { useMatrix } from "../../app/providers/useMatrix";
+import { formatPresenceStatus, formatTypingSummary } from "../../services/presence";
 
 function formatActivity(ts: number | null): string {
   if (!ts) return "No activity";
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatUnreadCount(count: number): string {
+  if (count > 99) return "99+";
+  return String(count);
 }
 
 export function RoomList({
@@ -18,22 +25,48 @@ export function RoomList({
   onSelect: (roomId: string) => void;
 }) {
   const { client } = useMatrix();
+  const [, bump] = useReducer((value: number) => value + 1, 0);
+
+  useEffect(() => {
+    if (!client) return;
+
+    const onPresence = () => bump();
+    const onTyping = () => bump();
+    const refreshTimer = window.setInterval(() => bump(), 30_000);
+
+    client.on(UserEvent.Presence, onPresence);
+    client.on(RoomMemberEvent.Typing, onTyping);
+
+    return () => {
+      window.clearInterval(refreshTimer);
+      client.off(UserEvent.Presence, onPresence);
+      client.off(RoomMemberEvent.Typing, onTyping);
+    };
+  }, [client]);
 
   const getRoomStatus = (room: Room): { text: string; online: boolean } => {
     const peers = room
       .getMembers()
       .filter((member) => member.userId !== currentUserId && (member.membership === "join" || member.membership === "invite"));
 
-    const typingPeer = peers.find((member) => member.typing);
-    if (typingPeer) {
-      return { text: "typing...", online: true };
+    const joinedPeers = peers.filter((member) => member.membership === "join");
+    const invitedPeer = peers.find((member) => member.membership === "invite");
+
+    const typingUsers = joinedPeers
+      .filter((member) => member.typing)
+      .map((member) => member.rawDisplayName || member.userId);
+    if (typingUsers.length > 0) {
+      return { text: formatTypingSummary(typingUsers, { compact: true }), online: true };
     }
 
-    const user = peers.length ? client?.getUser(peers[0].userId) : undefined;
-    if (user?.presence === "online") return { text: "online", online: true };
-    if (user?.presence === "unavailable") return { text: "away", online: false };
+    const peer = joinedPeers[0];
+    if (!peer) {
+      return invitedPeer ? { text: "invited", online: false } : { text: "offline", online: false };
+    }
 
-    return { text: "offline", online: false };
+    const user = client?.getUser(peer.userId);
+    const presence = formatPresenceStatus(user?.presence, user?.lastPresenceTs);
+    return { text: presence.label, online: presence.online };
   };
 
   return (
@@ -45,13 +78,17 @@ export function RoomList({
         ) : (
           rooms.map((r) => {
             const status = getRoomStatus(r);
+            const unreadCount = r.getUnreadNotificationCount();
             return (
               <button
                 key={r.roomId}
                 className={`room-item ${selectedRoomId === r.roomId ? "active" : ""}`}
                 onClick={() => onSelect(r.roomId)}
               >
-                <div className="room-name">{r.name || "Unnamed room"}</div>
+                <div className="room-head">
+                  <div className="room-name">{r.name || "Unnamed room"}</div>
+                  {unreadCount > 0 && <span className="room-unread-badge">{formatUnreadCount(unreadCount)}</span>}
+                </div>
                 <div className="room-meta">
                   <span>{r.getJoinedMemberCount()} members</span>
                   <span>{formatActivity(r.getLastActiveTimestamp())}</span>

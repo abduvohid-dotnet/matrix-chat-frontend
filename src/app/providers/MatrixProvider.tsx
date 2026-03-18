@@ -38,6 +38,14 @@ function toErrorMessage(error: unknown): string {
   return "Login failed";
 }
 
+async function setClientPresence(client: MatrixClient, presence: "online" | "offline" | "unavailable") {
+  try {
+    await client.setPresence({ presence });
+  } catch {
+    // ignore presence failures
+  }
+}
+
 export function MatrixProvider({ children }: { children: ReactNode }) {
   const [auth, setAuth] = useState<StoredAuth | null>(() => readAuth());
   const [status, setStatus] = useState<MatrixContextValue["status"]>(() => (readAuth() ? "connected" : "disconnected"));
@@ -62,8 +70,28 @@ export function MatrixProvider({ children }: { children: ReactNode }) {
     setClient(nextClient);
     clientRef.current = nextClient;
     nextClient.startClient({ initialSyncLimit: 20 });
+    void setClientPresence(nextClient, "online");
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        void setClientPresence(nextClient, "unavailable");
+        return;
+      }
+
+      void setClientPresence(nextClient, "online");
+    };
+
+    const onPageHide = () => {
+      void setClientPresence(nextClient, "offline");
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pagehide", onPageHide);
 
     return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pagehide", onPageHide);
+      void setClientPresence(nextClient, "offline");
       nextClient.stopClient();
       if (clientRef.current === nextClient) {
         clientRef.current = null;
@@ -142,12 +170,10 @@ export function MatrixProvider({ children }: { children: ReactNode }) {
     setError(null);
     setStatus("disconnected");
     const activeClient = clientRef.current;
-    clearAuth();
-    setAuth(null);
-    setClient(null);
 
     if (activeClient) {
       try {
+        await setClientPresence(activeClient, "offline");
         await activeClient.logout();
       } catch {
         // ignore
@@ -157,6 +183,10 @@ export function MatrixProvider({ children }: { children: ReactNode }) {
         clientRef.current = null;
       }
     }
+
+    clearAuth();
+    setAuth(null);
+    setClient(null);
   }, []);
 
   const value = useMemo<MatrixContextValue>(

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { MsgType } from "matrix-js-sdk";
-import { AudioLines, Clock3, Download, FileText, Pause, Play, PhoneCall, PhoneMissed } from "lucide-react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { MsgType, RoomEvent } from "matrix-js-sdk";
+import { AudioLines, CheckCheck, Clock3, Download, FileText, Pause, Play, PhoneCall, PhoneMissed } from "lucide-react";
 import type { UiMessage } from "../../hooks/useMatrixTimeline";
 import { useMatrix } from "../../app/providers/useMatrix";
 import { useMatrixMessageActions } from "../../hooks/useMatrixMessageActions";
@@ -271,6 +271,7 @@ export function ChatWindow({
   const { client, auth } = useMatrix();
   const { editMessage, deleteMessage } = useMatrixMessageActions();
   const { toggleReaction } = useMatrixReactions();
+  const [, bumpReceiptVersion] = useReducer((value: number) => value + 1, 0);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
@@ -295,6 +296,20 @@ export function ChatWindow({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!client) return;
+
+    const onReceipt = (_event: unknown, receiptRoom?: { roomId?: string }) => {
+      if (receiptRoom?.roomId !== roomId) return;
+      bumpReceiptVersion();
+    };
+
+    client.on(RoomEvent.Receipt, onReceipt as never);
+    return () => {
+      client.off(RoomEvent.Receipt, onReceipt as never);
+    };
+  }, [client, roomId]);
 
   useEffect(() => {
     if (!editingMessageId) return;
@@ -588,6 +603,32 @@ export function ChatWindow({
     return { left, top };
   }, [contextMenu]);
 
+  const directPeerUserId = useMemo(() => {
+    if (!client || showSenderNames) return null;
+    const room = client.getRoom(roomId);
+    return (
+      room
+        ?.getMembers()
+        .find((member) => member.userId !== myUserId && member.membership === "join")
+        ?.userId ?? null
+    );
+  }, [client, myUserId, roomId, showSenderNames]);
+
+  const seenByEventId = useMemo(() => {
+    const map = new Map<string, boolean>();
+    if (!client || !directPeerUserId) return map;
+
+    const room = client.getRoom(roomId);
+    if (!room) return map;
+
+    visibleMessages.forEach((message) => {
+      if (!message.eventId || message.sender !== myUserId) return;
+      map.set(message.eventId, room.hasUserReadEvent(directPeerUserId, message.eventId));
+    });
+
+    return map;
+  }, [client, directPeerUserId, myUserId, roomId, visibleMessages]);
+
   return (
     <div ref={containerRef} className="chat-window">
       {deleteError && <div className="chat-delete-error">{deleteError}</div>}
@@ -666,6 +707,11 @@ export function ChatWindow({
                   <div className="msg-time">
                     {formatMessageTime(message.ts)}
                     {message.edited && <span className="msg-edited">edited</span>}
+                    {!showSenderNames && message.sender === myUserId && message.eventId && seenByEventId.get(message.eventId) && (
+                      <span className="msg-seen" aria-label="Seen">
+                        <CheckCheck size={13} strokeWidth={2.2} />
+                      </span>
+                    )}
                   </div>
                 </div>
               )}

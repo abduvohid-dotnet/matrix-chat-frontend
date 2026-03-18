@@ -177,7 +177,7 @@ export function MessageComposer({
       typingTimeoutRef.current = window.setTimeout(() => {
         typingTimeoutRef.current = null;
         void sendTyping(false);
-      }, 1800);
+      }, 4000);
     },
     [sendTyping],
   );

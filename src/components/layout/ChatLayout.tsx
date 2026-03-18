@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMatrix } from "../../app/providers/useMatrix";
 import { useMatrixRooms } from "../../hooks/useMatrixRooms";
 import { useMatrixTimeline } from "../../hooks/useMatrixTimeline";
@@ -21,7 +21,7 @@ import { Phone } from "lucide-react";
 import type { MatrixReplyTarget } from "../../services/matrixReply";
 
 export function ChatLayout() {
-  const { auth, logout } = useMatrix();
+  const { auth, client, logout } = useMatrix();
   const { rooms } = useMatrixRooms();
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [autoSelectEnabled, setAutoSelectEnabled] = useState(true);
@@ -46,6 +46,7 @@ export function ChatLayout() {
   const [hiddenSelectedEventIds, setHiddenSelectedEventIds] = useState<string[]>([]);
   const [pinError, setPinError] = useState<string | null>(null);
   const [jumpToPinnedEventId, setJumpToPinnedEventId] = useState<string | null>(null);
+  const lastReadEventIdsRef = useRef<Record<string, string>>({});
   const { messages } = useMatrixTimeline(selectedRoomId);
   const { pinnedEventIds, pinMessage, unpinMessage } = useMatrixPins(selectedRoomId);
   const {
@@ -83,6 +84,21 @@ export function ChatLayout() {
   );
   const latestPinnedMessage = pinnedMessages[0] ?? null;
   const showSenderNames = useMemo(
+    () => Math.max(selectedRoom?.getJoinedMemberCount() ?? 0, groupMembers.length) > 2,
+    [groupMembers.length, selectedRoom],
+  );
+  const joinedGroupMemberCount = useMemo(
+    () => groupMembers.filter((member) => member.membership === "join").length,
+    [groupMembers],
+  );
+  const onlineGroupMemberCount = useMemo(
+    () =>
+      groupMembers.filter(
+        (member) => member.membership === "join" && member.statusTone === "online",
+      ).length,
+    [groupMembers],
+  );
+  const isLikelyGroupRoom = useMemo(
     () => Math.max(selectedRoom?.getJoinedMemberCount() ?? 0, groupMembers.length) > 2,
     [groupMembers.length, selectedRoom],
   );
@@ -156,6 +172,24 @@ export function ChatLayout() {
       return next.length === prev.length ? prev : next;
     });
   }, [messages]);
+
+  useEffect(() => {
+    if (!client || !selectedRoomId) return;
+
+    const room = client.getRoom(selectedRoomId);
+    const lastEvent = room
+      ?.getLiveTimeline()
+      .getEvents()
+      .filter((event) => event.getType() === "m.room.message")
+      .at(-1);
+
+    const lastEventId = lastEvent?.getId();
+    if (!lastEvent || !lastEventId) return;
+    if (lastReadEventIdsRef.current[selectedRoomId] === lastEventId) return;
+
+    lastReadEventIdsRef.current[selectedRoomId] = lastEventId;
+    void client.sendReadReceipt(lastEvent);
+  }, [client, messages, selectedRoomId]);
 
   const onReply = (message: UiMessage) => {
     if (!message.eventId) return;
@@ -460,12 +494,20 @@ export function ChatLayout() {
                     </>
                   ) : (
                     <>
-                      <div className={`presence-chip ${online ? "online" : "offline"}`}>
-                        <span className="presence-chip-dot" />
-                        {typingText || presenceText}
-                      </div>
+                      {!isLikelyGroupRoom && (
+                        <div className={`presence-chip ${online ? "online" : "offline"}`}>
+                          <span className="presence-chip-dot" />
+                          {typingText || presenceText}
+                        </div>
+                      )}
                       {selectedRoomId && !matrixCall.inCall && (
                         <>
+                          {isLikelyGroupRoom && (
+                            <div className="group-head-stats">
+                              <span>{joinedGroupMemberCount} members</span>
+                              <span>{onlineGroupMemberCount} online</span>
+                            </div>
+                          )}
                           <button
                             type="button"
                             className="btn ghost"
@@ -549,6 +591,7 @@ export function ChatLayout() {
                   <div className="pinned-banner-text">{latestPinnedMessage.text || "Message"}</div>
                 </button>
               )}
+              {typingText && <div className="typing-banner">{typingText}</div>}
               {pinError && <div className="chat-selection-error">{pinError}</div>}
               <ChatWindow
                 roomId={selectedRoomId}

@@ -1,27 +1,11 @@
 import { useEffect, useMemo, useReducer } from "react";
 import { RoomMemberEvent, UserEvent } from "matrix-js-sdk";
 import { useMatrix } from "../app/providers/useMatrix";
-
-type PresenceUi = {
-  label: string;
-  online: boolean;
-};
-
-function formatPresence(userPresence: string | undefined, lastPresenceTs: number | undefined): PresenceUi {
-  if (userPresence === "online") return { label: "online", online: true };
-  if (userPresence === "unavailable") return { label: "away", online: false };
-
-  if (typeof lastPresenceTs === "number" && lastPresenceTs > 0) {
-    const text = new Date(lastPresenceTs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    return { label: `last seen ${text}`, online: false };
-  }
-
-  return { label: "offline", online: false };
-}
+import { formatPresenceStatus, formatTypingSummary } from "../services/presence";
 
 export function useMatrixRoomStatus(roomId: string | null) {
   const { client, auth } = useMatrix();
-  const [, bump] = useReducer((value: number) => value + 1, 0);
+  const [version, bump] = useReducer((value: number) => value + 1, 0);
 
   useEffect(() => {
     if (!client || !roomId) return;
@@ -41,8 +25,12 @@ export function useMatrixRoomStatus(roomId: string | null) {
     client.on(RoomMemberEvent.Typing, onTyping);
     client.on(RoomMemberEvent.Membership, onMember);
     client.on(UserEvent.Presence, onPresence);
+    const refreshTimer = window.setInterval(() => {
+      bump();
+    }, 30_000);
 
     return () => {
+      window.clearInterval(refreshTimer);
       client.off(RoomMemberEvent.Typing, onTyping);
       client.off(RoomMemberEvent.Membership, onMember);
       client.off(UserEvent.Presence, onPresence);
@@ -71,30 +59,27 @@ export function useMatrixRoomStatus(roomId: string | null) {
       .getMembers()
       .filter((member) => member.userId !== auth.userId && (member.membership === "join" || member.membership === "invite"));
 
-    const typingUsers = peers.filter((member) => member.typing).map((member) => member.rawDisplayName || member.userId);
-    const typingText =
-      typingUsers.length === 0
-        ? ""
-        : typingUsers.length === 1
-          ? `${typingUsers[0]} typing...`
-          : `${typingUsers.length} people typing...`;
+    const joinedPeers = peers.filter((member) => member.membership === "join");
+    const invitedPeer = peers.find((member) => member.membership === "invite");
+    const typingUsers = joinedPeers.filter((member) => member.typing).map((member) => member.rawDisplayName || member.userId);
+    const typingText = formatTypingSummary(typingUsers);
 
-    const peer = peers.find((member) => member.membership === "join") ?? peers[0];
+    const peer = joinedPeers[0];
     if (!peer) {
       return {
         typingText,
-        presenceText: "offline",
+        presenceText: invitedPeer ? "invited" : "offline",
         online: false,
       };
     }
 
     const user = client.getUser(peer.userId);
-    const presence = formatPresence(user?.presence, user?.lastPresenceTs);
+    const presence = formatPresenceStatus(user?.presence, user?.lastPresenceTs);
 
     return {
       typingText,
       presenceText: presence.label,
       online: presence.online,
     };
-  }, [auth, client, roomId]);
+  }, [auth, client, roomId, version]);
 }

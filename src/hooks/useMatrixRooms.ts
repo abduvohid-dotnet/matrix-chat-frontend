@@ -15,6 +15,7 @@ export function useMatrixRooms() {
 
     client.on(ClientEvent.Room, refresh);
     client.on(RoomEvent.Timeline, refresh);
+    client.on(RoomEvent.Receipt, refresh);
     client.on(RoomMemberEvent.Typing, refresh);
     client.on(RoomMemberEvent.Membership, refresh);
     client.on(UserEvent.Presence, refresh);
@@ -22,6 +23,7 @@ export function useMatrixRooms() {
     return () => {
       client.off(ClientEvent.Room, refresh);
       client.off(RoomEvent.Timeline, refresh);
+      client.off(RoomEvent.Receipt, refresh);
       client.off(RoomMemberEvent.Typing, refresh);
       client.off(RoomMemberEvent.Membership, refresh);
       client.off(UserEvent.Presence, refresh);
