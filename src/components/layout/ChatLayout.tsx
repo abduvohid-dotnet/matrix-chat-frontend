@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMatrix } from "../../app/providers/useMatrix";
 import { useMatrixRooms } from "../../hooks/useMatrixRooms";
 import { useMatrixTimeline } from "../../hooks/useMatrixTimeline";
@@ -19,6 +19,11 @@ import { ForwardDialog } from "../chat/ForwardDialog";
 import { GroupManagementPanel } from "../chat/GroupManagementPanel";
 import { Phone } from "lucide-react";
 import type { MatrixReplyTarget } from "../../services/matrixReply";
+import {
+  readRoomScrollAnchors,
+  saveRoomScrollAnchor,
+  type RoomScrollAnchor,
+} from "../../services/roomScrollStorage";
 
 export function ChatLayout() {
   const { auth, client, logout } = useMatrix();
@@ -46,6 +51,9 @@ export function ChatLayout() {
   const [hiddenSelectedEventIds, setHiddenSelectedEventIds] = useState<string[]>([]);
   const [pinError, setPinError] = useState<string | null>(null);
   const [jumpToPinnedEventId, setJumpToPinnedEventId] = useState<string | null>(null);
+  const [roomScrollAnchors, setRoomScrollAnchors] = useState<Record<string, RoomScrollAnchor>>(
+    () => readRoomScrollAnchors(),
+  );
   const lastReadEventIdsRef = useRef<Record<string, string>>({});
   const { messages } = useMatrixTimeline(selectedRoomId);
   const { pinnedEventIds, pinMessage, unpinMessage } = useMatrixPins(selectedRoomId);
@@ -112,6 +120,32 @@ export function ChatLayout() {
     [messages],
   );
 
+  const persistSelectedRoomScroll = () => {
+    // Scroll anchor is owned by ChatWindow and streamed up continuously.
+  };
+
+  const handleChatWindowScrollPositionChange = useCallback(
+    (nextAnchor: RoomScrollAnchor | null) => {
+      if (!selectedRoomId) return;
+      if (!nextAnchor) return;
+      saveRoomScrollAnchor(selectedRoomId, nextAnchor);
+      setRoomScrollAnchors((prev) => {
+        const current = prev[selectedRoomId];
+        if (
+          current?.messageId === nextAnchor.messageId &&
+          current.offset === nextAnchor.offset
+        ) {
+          return prev;
+        }
+        return {
+          ...prev,
+          [selectedRoomId]: nextAnchor,
+        };
+      });
+    },
+    [selectedRoomId],
+  );
+
   useEffect(() => {
     if (!rooms.length) {
       setSelectedRoomId(null);
@@ -131,6 +165,7 @@ export function ChatLayout() {
   useEffect(() => {
     if (!matrixCall.roomId) return;
     if (selectedRoomId === matrixCall.roomId) return;
+    persistSelectedRoomScroll();
     setAutoSelectEnabled(false);
     setSelectedRoomId(matrixCall.roomId);
   }, [matrixCall.roomId, selectedRoomId]);
@@ -430,6 +465,7 @@ export function ChatLayout() {
             selectedRoomId={selectedRoomId}
             currentUserId={auth.userId}
             onSelect={(roomId) => {
+              persistSelectedRoomScroll();
               setAutoSelectEnabled(false);
               setSelectedRoomId(roomId);
             }}
@@ -531,6 +567,7 @@ export function ChatLayout() {
                     type="button"
                     className="btn ghost close-chat-btn"
                     onClick={() => {
+                      persistSelectedRoomScroll();
                       setAutoSelectEnabled(false);
                       setSelectedRoomId(null);
                     }}
@@ -598,6 +635,8 @@ export function ChatLayout() {
                 messages={messages}
                 myUserId={auth.userId}
                 showSenderNames={showSenderNames}
+                initialScrollAnchor={roomScrollAnchors[selectedRoomId] ?? null}
+                onScrollPositionChange={handleChatWindowScrollPositionChange}
                 onReply={onReply}
                 onForward={onForward}
                 onPin={onPin}

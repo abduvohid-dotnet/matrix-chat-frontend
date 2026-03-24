@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { MsgType, RoomEvent } from "matrix-js-sdk";
 import { AudioLines, CheckCheck, Clock3, Download, FileText, Pause, Play, PhoneCall, PhoneMissed } from "lucide-react";
 import type { UiMessage } from "../../hooks/useMatrixTimeline";
@@ -6,6 +6,7 @@ import { useMatrix } from "../../app/providers/useMatrix";
 import { useMatrixMessageActions } from "../../hooks/useMatrixMessageActions";
 import { useMatrixReactions } from "../../hooks/useMatrixReactions";
 import { formatMessageTextToHtml, stripFormattingMarkers } from "../../services/textFormatting";
+import type { RoomScrollAnchor } from "../../services/roomScrollStorage";
 
 function formatMessageTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -238,6 +239,8 @@ export function ChatWindow({
   messages,
   myUserId,
   showSenderNames,
+  initialScrollAnchor,
+  onScrollPositionChange,
   onReply,
   onForward,
   onPin,
@@ -255,6 +258,8 @@ export function ChatWindow({
   messages: UiMessage[];
   myUserId: string;
   showSenderNames: boolean;
+  initialScrollAnchor: RoomScrollAnchor | null;
+  onScrollPositionChange: (anchor: RoomScrollAnchor | null) => void;
   onReply: (message: UiMessage) => void;
   onForward: (message: UiMessage) => void;
   onPin: (message: UiMessage) => void;
@@ -276,7 +281,11 @@ export function ChatWindow({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const messageRefs = useRef(new Map<string, HTMLDivElement>());
+  const messageItemRefs = useRef(new Map<string, HTMLDivElement>());
+  const visibleMessagesRef = useRef<UiMessage[]>([]);
   const highlightTimeoutRef = useRef<number | null>(null);
+  const pendingRestoreRoomIdRef = useRef<string | null>(null);
+  const restoredRoomIdRef = useRef<string | null>(null);
   const previousRoomIdRef = useRef<string | null>(null);
   const previousLastVisibleMessageIdRef = useRef<string | null>(null);
   const previousVisibleMessageCountRef = useRef(0);
@@ -420,6 +429,104 @@ export function ChatWindow({
       ),
     [hiddenEventIds, messages, optimisticDeletedIds],
   );
+
+  useEffect(() => {
+    visibleMessagesRef.current = visibleMessages;
+  }, [visibleMessages]);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+
+    const getViewportAnchor = (): RoomScrollAnchor | null => {
+      const containerTop = element.getBoundingClientRect().top;
+
+      for (const message of visibleMessagesRef.current) {
+        const node = messageItemRefs.current.get(message.id);
+        if (!node) continue;
+
+        const nodeRect = node.getBoundingClientRect();
+        const top = nodeRect.top - containerTop;
+        const bottom = nodeRect.bottom - containerTop;
+        if (bottom > 0) {
+          return {
+            messageId: message.id,
+            offset: top,
+          };
+        }
+      }
+
+      return null;
+    };
+
+    const persistScrollPosition = () => {
+      if (restoredRoomIdRef.current !== roomId) return;
+      onScrollPositionChange(getViewportAnchor());
+    };
+
+    element.addEventListener("scroll", persistScrollPosition, { passive: true });
+
+    return () => {
+      onScrollPositionChange(getViewportAnchor());
+      element.removeEventListener("scroll", persistScrollPosition);
+    };
+  }, [onScrollPositionChange, roomId]);
+
+  useEffect(() => {
+    pendingRestoreRoomIdRef.current = roomId;
+    restoredRoomIdRef.current = null;
+  }, [roomId]);
+
+  useLayoutEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+    if (restoredRoomIdRef.current === roomId || pendingRestoreRoomIdRef.current !== roomId) return;
+
+    if (visibleMessages.length === 0) return;
+
+    let frameId = 0;
+    let timeoutId = 0;
+    let settleTimeoutId = 0;
+    const applyScrollPosition = () => {
+      const currentElement = containerRef.current;
+      if (!currentElement) return;
+      const fallbackScrollTop = Math.max(0, currentElement.scrollHeight - currentElement.clientHeight);
+
+      if (!initialScrollAnchor) {
+        currentElement.scrollTop = fallbackScrollTop;
+      } else {
+        const targetNode = messageItemRefs.current.get(initialScrollAnchor.messageId);
+        if (!targetNode) return;
+
+        const maxScrollTop = Math.max(0, currentElement.scrollHeight - currentElement.clientHeight);
+        const nextScrollTop = Math.min(
+          Math.max(targetNode.offsetTop - initialScrollAnchor.offset, 0),
+          maxScrollTop,
+        );
+        currentElement.scrollTop = nextScrollTop;
+      }
+    };
+
+    frameId = window.requestAnimationFrame(() => {
+      applyScrollPosition();
+      timeoutId = window.setTimeout(() => {
+        applyScrollPosition();
+        settleTimeoutId = window.setTimeout(applyScrollPosition, 80);
+      }, 0);
+    });
+
+    pendingRestoreRoomIdRef.current = null;
+    restoredRoomIdRef.current = roomId;
+    previousRoomIdRef.current = roomId;
+    previousLastVisibleMessageIdRef.current = visibleMessages[visibleMessages.length - 1]?.id ?? null;
+    previousVisibleMessageCountRef.current = visibleMessages.length;
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.clearTimeout(timeoutId);
+      window.clearTimeout(settleTimeoutId);
+    };
+  }, [initialScrollAnchor, roomId, visibleMessages]);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -647,6 +754,12 @@ export function ChatWindow({
             <div
               key={message.id}
               ref={(node) => {
+                if (node) {
+                  messageItemRefs.current.set(message.id, node);
+                } else {
+                  messageItemRefs.current.delete(message.id);
+                }
+
                 if (!message.eventId) return;
                 if (node) {
                   messageRefs.current.set(message.eventId, node);

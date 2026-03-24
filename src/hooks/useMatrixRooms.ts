@@ -3,7 +3,7 @@ import { ClientEvent, RoomEvent, RoomMemberEvent, UserEvent, type Room } from "m
 import { useMatrix } from "../app/providers/useMatrix";
 
 export function useMatrixRooms() {
-  const { client } = useMatrix();
+  const { client, auth } = useMatrix();
   const [rooms, setRooms] = useState<Room[]>([]);
 
   useEffect(() => {
@@ -31,8 +31,50 @@ export function useMatrixRooms() {
   }, [client]);
 
   const sorted = useMemo(() => {
-    return [...rooms].sort((a, b) => (b.getLastActiveTimestamp() ?? 0) - (a.getLastActiveTimestamp() ?? 0));
-  }, [rooms]);
+    const orderedRooms = [...rooms].sort(
+      (a, b) => (b.getLastActiveTimestamp() ?? 0) - (a.getLastActiveTimestamp() ?? 0),
+    );
+
+    if (!auth) return orderedRooms;
+
+    const directRoomByPeer = new Map<string, Room>();
+    const nextRooms: Room[] = [];
+
+    const getDirectPeerKey = (room: Room): string | null => {
+      if (room.getMyMembership() !== "join") return null;
+
+      const peers = room
+        .getMembers()
+        .filter(
+          (member) =>
+            member.userId !== auth.userId &&
+            (member.membership === "join" || member.membership === "invite"),
+        );
+
+      if (peers.length !== 1) return null;
+
+      const joinedMembers = room
+        .getMembers()
+        .filter((member) => member.membership === "join" || member.membership === "invite");
+
+      if (joinedMembers.length > 2) return null;
+      return peers[0].userId;
+    };
+
+    orderedRooms.forEach((room) => {
+      const directPeerKey = getDirectPeerKey(room);
+      if (!directPeerKey) {
+        nextRooms.push(room);
+        return;
+      }
+
+      if (directRoomByPeer.has(directPeerKey)) return;
+      directRoomByPeer.set(directPeerKey, room);
+      nextRooms.push(room);
+    });
+
+    return nextRooms;
+  }, [auth, rooms]);
 
   return { rooms: sorted };
 }
