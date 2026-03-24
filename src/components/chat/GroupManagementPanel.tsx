@@ -42,6 +42,7 @@ type GroupMediaStats = {
 };
 
 export function GroupManagementPanel({
+  mode,
   roomName,
   roomId,
   members,
@@ -60,6 +61,7 @@ export function GroupManagementPanel({
   onChangeRole,
   onChangePermission,
 }: {
+  mode: "group" | "direct";
   roomName: string;
   roomId: string;
   members: GroupMemberSummary[];
@@ -83,6 +85,7 @@ export function GroupManagementPanel({
   const inviteRef = useRef<HTMLDivElement | null>(null);
   const permissionsRef = useRef<HTMLDivElement | null>(null);
   const membersRef = useRef<HTMLDivElement | null>(null);
+  const isDirectChat = mode === "direct";
 
   const canManageRoles = myPowerLevel >= 100;
   const canInvite = myPowerLevel >= inviteLevel;
@@ -118,54 +121,66 @@ export function GroupManagementPanel({
             <div className="group-panel-avatar">{getInitials(roomName)}</div>
             <div className="group-panel-name">{roomName}</div>
             <div className="group-panel-subtitle">
-              {members.length} members
-              <span className="group-panel-divider" />
-              {levelToLabel(myPowerLevel)}
+              {isDirectChat ? (
+                <>Personal chat</>
+              ) : (
+                <>
+                  {members.length} members
+                  <span className="group-panel-divider" />
+                  {levelToLabel(myPowerLevel)}
+                </>
+              )}
             </div>
           </div>
 
           <div className="group-action-grid">
-            <button
-              type="button"
-              className="group-action-card"
-              disabled={!canInvite || busy}
-              onClick={() => inviteRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-            >
-              <UserPlus size={18} />
-              <span>Invite</span>
-            </button>
+            {!isDirectChat && (
+              <button
+                type="button"
+                className="group-action-card"
+                disabled={!canInvite || busy}
+                onClick={() => inviteRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              >
+                <UserPlus size={18} />
+                <span>Invite</span>
+              </button>
+            )}
             <button
               type="button"
               className="group-action-card"
               onClick={() => permissionsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
             >
               <Settings2 size={18} />
-              <span>Manage</span>
+              <span>{isDirectChat ? "Info" : "Manage"}</span>
             </button>
-            <button
-              type="button"
-              className="group-action-card"
-              onClick={() => membersRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-            >
-              <Users size={18} />
-              <span>Members</span>
-            </button>
-            <button
-              type="button"
-              className="group-action-card danger"
-              disabled={busy}
-              onClick={async () => {
-                setLocalBusy("leave");
-                try {
-                  await onLeave();
-                } finally {
-                  setLocalBusy(null);
-                }
-              }}
-            >
-              <LogOut size={18} />
-              <span>{localBusy === "leave" ? "Leaving..." : "Leave"}</span>
-            </button>
+            {!isDirectChat && (
+              <button
+                type="button"
+                className="group-action-card"
+                onClick={() => membersRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              >
+                <Users size={18} />
+                <span>Members</span>
+              </button>
+            )}
+            {!isDirectChat && (
+              <button
+                type="button"
+                className="group-action-card danger"
+                disabled={busy}
+                onClick={async () => {
+                  setLocalBusy("leave");
+                  try {
+                    await onLeave();
+                  } finally {
+                    setLocalBusy(null);
+                  }
+                }}
+              >
+                <LogOut size={18} />
+                <span>{localBusy === "leave" ? "Leaving..." : "Leave"}</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -189,151 +204,161 @@ export function GroupManagementPanel({
           </div>
         </div>
 
-        <div ref={inviteRef} className="group-panel-section">
-          <div className="group-section-title">Invite users</div>
-          {canInvite ? (
-            <div className="group-invite-box">
-              <input
-                className="input group-panel-input"
-                value={inviteInput}
-                onChange={(event) => setInviteInput(event.target.value)}
-                placeholder="@user:server, @another:server"
-                disabled={busy}
-              />
-              <button
-                type="button"
-                className="btn"
-                disabled={busy || !inviteInput.trim()}
-                onClick={async () => {
-                  setLocalBusy("invite");
-                  try {
-                    await onInvite(inviteInput);
-                    setInviteInput("");
-                  } finally {
-                    setLocalBusy(null);
-                  }
-                }}
-              >
-                {localBusy === "invite" ? "Inviting..." : "Invite"}
-              </button>
-            </div>
-          ) : (
-            <div className="group-panel-note">
-              Invite permission requires at least <strong>{levelToLabel(inviteLevel)}</strong>.
-            </div>
-          )}
-        </div>
+        {!isDirectChat && (
+          <div ref={inviteRef} className="group-panel-section">
+            <div className="group-section-title">Invite users</div>
+            {canInvite ? (
+              <div className="group-invite-box">
+                <input
+                  className="input group-panel-input"
+                  value={inviteInput}
+                  onChange={(event) => setInviteInput(event.target.value)}
+                  placeholder="@user:server, @another:server"
+                  disabled={busy}
+                />
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy || !inviteInput.trim()}
+                  onClick={async () => {
+                    setLocalBusy("invite");
+                    try {
+                      await onInvite(inviteInput);
+                      setInviteInput("");
+                    } finally {
+                      setLocalBusy(null);
+                    }
+                  }}
+                >
+                  {localBusy === "invite" ? "Inviting..." : "Invite"}
+                </button>
+              </div>
+            ) : (
+              <div className="group-panel-note">
+                Invite permission requires at least <strong>{levelToLabel(inviteLevel)}</strong>.
+              </div>
+            )}
+          </div>
+        )}
 
         <div ref={permissionsRef} className="group-panel-section">
-          <div className="group-section-title">Permissions</div>
-          <div className="group-permissions-grid">
-            {permissionRows.map((permission) => (
-              <label key={permission.key} className="group-permission-card">
-                <span>{permission.label}</span>
-                {canManageRoles ? (
-                  <select
-                    className="input group-panel-input"
-                    value={permission.value}
-                    disabled={busy}
-                    onChange={async (event) => {
-                      const nextValue = Number(event.target.value);
-                      setLocalBusy(`perm-${permission.key}`);
-                      try {
-                        await onChangePermission(permission.key, nextValue);
-                      } finally {
-                        setLocalBusy(null);
-                      }
-                    }}
-                  >
-                    {POWER_LEVEL_OPTIONS.map((option) => (
-                      <option key={`${permission.key}-${option.value}`} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <strong>{levelToLabel(permission.value)}</strong>
-                )}
-              </label>
-            ))}
-          </div>
-        </div>
-
-        <div ref={membersRef} className="group-panel-section">
-          <div className="group-section-title group-section-title-with-count">
-            <span>Members</span>
-            <span>{members.length}</span>
-          </div>
-          <div className="group-members-list">
-            {members.map((member) => (
-              <div key={member.userId} className="group-member-row">
-                <div className="group-member-main">
-                  {member.avatarUrl ? (
-                    <img className="group-member-avatar" src={member.avatarUrl} alt={member.displayName} />
-                  ) : (
-                    <div className="group-member-avatar fallback">{getInitials(member.displayName)}</div>
-                  )}
-
-                  <div className="group-member-copy">
-                    <div className="group-member-line">
-                      <div className="group-member-name">{member.displayName}</div>
-                      <span className={`group-member-role-chip role-${levelToLabel(member.powerLevel).toLowerCase()}`}>
-                        {member.isCreator ? "Owner" : levelToLabel(member.powerLevel)}
-                      </span>
-                      {member.isSelf && <span className="group-member-self">You</span>}
-                    </div>
-                    <div className={`group-member-status ${member.statusTone}`}>{member.statusText}</div>
-                    <div className="group-member-id">{member.userId}</div>
-                  </div>
-                </div>
-
-                <div className="group-member-actions">
-                  {canManageRoles && !member.isCreator ? (
+          <div className="group-section-title">{isDirectChat ? "Chat info" : "Permissions"}</div>
+          {isDirectChat ? (
+            <div className="group-panel-note">
+              This is a personal chat. Group roles, members and invite controls do not apply here.
+            </div>
+          ) : (
+            <div className="group-permissions-grid">
+              {permissionRows.map((permission) => (
+                <label key={permission.key} className="group-permission-card">
+                  <span>{permission.label}</span>
+                  {canManageRoles ? (
                     <select
-                      className="input group-panel-input group-member-select"
-                      value={member.powerLevel}
+                      className="input group-panel-input"
+                      value={permission.value}
                       disabled={busy}
                       onChange={async (event) => {
                         const nextValue = Number(event.target.value);
-                        setLocalBusy(`role-${member.userId}`);
+                        setLocalBusy(`perm-${permission.key}`);
                         try {
-                          await onChangeRole(member.userId, nextValue);
+                          await onChangePermission(permission.key, nextValue);
                         } finally {
                           setLocalBusy(null);
                         }
                       }}
                     >
                       {POWER_LEVEL_OPTIONS.map((option) => (
-                        <option key={`${member.userId}-${option.value}`} value={option.value}>
+                        <option key={`${permission.key}-${option.value}`} value={option.value}>
                           {option.label}
                         </option>
                       ))}
                     </select>
-                  ) : null}
-
-                  {member.canRemove && (
-                    <button
-                      type="button"
-                      className="group-member-remove"
-                      disabled={busy}
-                      onClick={async () => {
-                        setLocalBusy(`remove-${member.userId}`);
-                        try {
-                          await onRemoveMember(member.userId);
-                        } finally {
-                          setLocalBusy(null);
-                        }
-                      }}
-                    >
-                      <UserRoundX size={16} />
-                      <span>{localBusy === `remove-${member.userId}` ? "Removing..." : "Remove"}</span>
-                    </button>
+                  ) : (
+                    <strong>{levelToLabel(permission.value)}</strong>
                   )}
-                </div>
-              </div>
-            ))}
-          </div>
+                </label>
+              ))}
+            </div>
+          )}
         </div>
+
+        {!isDirectChat && (
+          <div ref={membersRef} className="group-panel-section">
+            <div className="group-section-title group-section-title-with-count">
+              <span>Members</span>
+              <span>{members.length}</span>
+            </div>
+            <div className="group-members-list">
+              {members.map((member) => (
+                <div key={member.userId} className="group-member-row">
+                  <div className="group-member-main">
+                    {member.avatarUrl ? (
+                      <img className="group-member-avatar" src={member.avatarUrl} alt={member.displayName} />
+                    ) : (
+                      <div className="group-member-avatar fallback">{getInitials(member.displayName)}</div>
+                    )}
+
+                    <div className="group-member-copy">
+                      <div className="group-member-line">
+                        <div className="group-member-name">{member.displayName}</div>
+                        <span className={`group-member-role-chip role-${levelToLabel(member.powerLevel).toLowerCase()}`}>
+                          {member.isCreator ? "Owner" : levelToLabel(member.powerLevel)}
+                        </span>
+                        {member.isSelf && <span className="group-member-self">You</span>}
+                      </div>
+                      <div className={`group-member-status ${member.statusTone}`}>{member.statusText}</div>
+                      <div className="group-member-id">{member.userId}</div>
+                    </div>
+                  </div>
+
+                  <div className="group-member-actions">
+                    {canManageRoles && !member.isCreator ? (
+                      <select
+                        className="input group-panel-input group-member-select"
+                        value={member.powerLevel}
+                        disabled={busy}
+                        onChange={async (event) => {
+                          const nextValue = Number(event.target.value);
+                          setLocalBusy(`role-${member.userId}`);
+                          try {
+                            await onChangeRole(member.userId, nextValue);
+                          } finally {
+                            setLocalBusy(null);
+                          }
+                        }}
+                      >
+                        {POWER_LEVEL_OPTIONS.map((option) => (
+                          <option key={`${member.userId}-${option.value}`} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+
+                    {member.canRemove && (
+                      <button
+                        type="button"
+                        className="group-member-remove"
+                        disabled={busy}
+                        onClick={async () => {
+                          setLocalBusy(`remove-${member.userId}`);
+                          try {
+                            await onRemoveMember(member.userId);
+                          } finally {
+                            setLocalBusy(null);
+                          }
+                        }}
+                      >
+                        <UserRoundX size={16} />
+                        <span>{localBusy === `remove-${member.userId}` ? "Removing..." : "Remove"}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {(error || localBusy) && (
           <div className="chat-selection-error group-panel-error">

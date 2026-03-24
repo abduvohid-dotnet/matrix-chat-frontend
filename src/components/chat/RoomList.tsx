@@ -1,8 +1,13 @@
-import { useEffect, useReducer } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import { RoomMemberEvent, UserEvent, type Room } from "matrix-js-sdk";
+import { Search } from "lucide-react";
 import { useMatrix } from "../../app/providers/useMatrix";
 import { formatPresenceStatus, formatTypingSummary } from "../../services/presence";
-import { getLatestVisibleMessageTimestamp } from "../../services/roomActivity";
+import {
+  getLatestVisibleMessagePreview,
+  getLatestVisibleMessageTimestamp,
+} from "../../services/roomActivity";
+import { getDirectPeerUserId, isDirectRoom } from "../../services/roomKind";
 
 function formatActivity(ts: number | null): string {
   if (!ts) return "No activity";
@@ -13,6 +18,22 @@ function formatUnreadCount(count: number): string {
   if (count > 99) return "99+";
   return String(count);
 }
+
+function getRoomInitial(room: Room): string {
+  return (room.name || room.roomId).trim().charAt(0).toUpperCase() || "#";
+}
+
+function getAvatarTone(seed: string): string {
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
+  }
+
+  const hue = hash % 360;
+  return `linear-gradient(180deg, hsl(${hue} 84% 72%) 0%, hsl(${hue} 72% 56%) 100%)`;
+}
+
+type RoomFilter = "all" | "personal" | "groups";
 
 export function RoomList({
   rooms,
@@ -27,6 +48,8 @@ export function RoomList({
 }) {
   const { client } = useMatrix();
   const [, bump] = useReducer((value: number) => value + 1, 0);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<RoomFilter>("all");
 
   useEffect(() => {
     if (!client) return;
@@ -70,40 +93,109 @@ export function RoomList({
     return { text: presence.label, online: presence.online };
   };
 
+  const searchedRooms = useMemo(() => {
+    const trimmed = query.trim().toLowerCase();
+    if (!trimmed) return rooms;
+
+    return rooms.filter((room) => {
+      const name = (room.name || "").toLowerCase();
+      const roomId = room.roomId.toLowerCase();
+      const preview = getLatestVisibleMessagePreview(room).toLowerCase();
+      const peerId = getDirectPeerUserId(room, currentUserId)?.toLowerCase() ?? "";
+
+      return (
+        name.includes(trimmed) ||
+        roomId.includes(trimmed) ||
+        preview.includes(trimmed) ||
+        peerId.includes(trimmed)
+      );
+    });
+  }, [currentUserId, query, rooms]);
+
+  const filteredRooms = useMemo(() => {
+    if (filter === "all") return searchedRooms;
+    if (filter === "personal") {
+      return searchedRooms.filter((room) => isDirectRoom(room, currentUserId));
+    }
+    return searchedRooms.filter((room) => !isDirectRoom(room, currentUserId));
+  }, [currentUserId, filter, searchedRooms]);
+
+  const renderRoom = (room: Room) => {
+    const status = getRoomStatus(room);
+    const unreadCount = room.getUnreadNotificationCount();
+    const isPersonal = isDirectRoom(room, currentUserId);
+    const preview = getLatestVisibleMessagePreview(room);
+    const avatarSeed = getDirectPeerUserId(room, currentUserId) ?? room.roomId;
+
+    return (
+      <button
+        key={room.roomId}
+        className={`room-item ${selectedRoomId === room.roomId ? "active" : ""}`}
+        onClick={() => onSelect(room.roomId)}
+      >
+        <div className="room-card-avatar" style={{ background: getAvatarTone(avatarSeed) }}>
+          {getRoomInitial(room)}
+        </div>
+        <div className="room-card-body">
+          <div className="room-head">
+            <div className="room-name">{room.name || "Unnamed room"}</div>
+            <div className="room-head-right">
+              <span className="room-time">{formatActivity(getLatestVisibleMessageTimestamp(room))}</span>
+              {unreadCount > 0 && <span className="room-unread-badge">{formatUnreadCount(unreadCount)}</span>}
+            </div>
+          </div>
+          <div className="room-preview-row">
+            <div className="room-preview">{preview}</div>
+          </div>
+          <div className="room-meta">
+            <span>{isPersonal ? "Personal" : `${room.getJoinedMemberCount()} members`}</span>
+            <span className={`presence-pill ${status.online ? "online" : "offline"}`}>
+              <span className="presence-pill-dot" />
+              {status.text}
+            </span>
+          </div>
+        </div>
+      </button>
+    );
+  };
+
   return (
     <div className="sidebar">
       <div className="sidebar-title">Rooms</div>
       <div className="room-list">
+        <div className="room-search">
+          <Search size={16} />
+          <input
+            className="room-search-input"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search chats, users..."
+          />
+        </div>
+
+        <div className="room-filter-tabs">
+          {[
+            { id: "all", label: "All" },
+            { id: "personal", label: "Personal" },
+            { id: "groups", label: "Groups" },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={`room-filter-tab ${filter === tab.id ? "active" : ""}`}
+              onClick={() => setFilter(tab.id as RoomFilter)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
         {!rooms.length ? (
           <div className="room-empty">Hali room yo'q. Yuqoridan user yozib chat oching.</div>
+        ) : !filteredRooms.length ? (
+          <div className="room-empty">Mos room topilmadi.</div>
         ) : (
-          rooms.map((r) => {
-            const status = getRoomStatus(r);
-            const unreadCount = r.getUnreadNotificationCount();
-            return (
-              <button
-                key={r.roomId}
-                className={`room-item ${selectedRoomId === r.roomId ? "active" : ""}`}
-                onClick={() => onSelect(r.roomId)}
-              >
-                <div className="room-head">
-                  <div className="room-name">{r.name || "Unnamed room"}</div>
-                  {unreadCount > 0 && <span className="room-unread-badge">{formatUnreadCount(unreadCount)}</span>}
-                </div>
-                <div className="room-meta">
-                  <span>{r.getJoinedMemberCount()} members</span>
-                  <span>{formatActivity(getLatestVisibleMessageTimestamp(r))}</span>
-                </div>
-                <div className="room-presence">
-                  <span className={`presence-pill ${status.online ? "online" : "offline"}`}>
-                    <span className="presence-pill-dot" />
-                    {status.text}
-                  </span>
-                </div>
-                <div className="room-id">{r.roomId}</div>
-              </button>
-            );
-          })
+          filteredRooms.map(renderRoom)
         )}
       </div>
     </div>

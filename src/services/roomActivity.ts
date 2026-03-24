@@ -1,6 +1,8 @@
 import { EventType, type MatrixEvent, type Room } from "matrix-js-sdk";
 
 type RoomMessageContent = {
+  body?: unknown;
+  msgtype?: unknown;
   "m.relates_to"?: {
     rel_type?: unknown;
   };
@@ -26,6 +28,27 @@ function getRedactedEventId(event: MatrixEvent): string | null {
 }
 
 export function getLatestVisibleMessageTimestamp(room: Room): number {
+  const latestEvent = getLatestVisibleMessageEvent(room);
+  return latestEvent?.getTs() ?? room.getLastActiveTimestamp() ?? 0;
+}
+
+export function getLatestVisibleMessagePreview(room: Room): string {
+  const event = getLatestVisibleMessageEvent(room);
+  if (!event) return "No messages yet";
+
+  const content = event.getContent() as RoomMessageContent;
+  const msgtype = asString(content.msgtype) ?? "m.text";
+  const body = asString(content.body) ?? "";
+
+  if (msgtype === "m.image") return "Photo";
+  if (msgtype === "m.video") return "Video";
+  if (msgtype === "m.audio") return "Voice message";
+  if (msgtype === "m.file") return body || "File";
+
+  return body || "Message";
+}
+
+function getLatestVisibleMessageEvent(room: Room): MatrixEvent | null {
   const events = room.getLiveTimeline().getEvents();
   const redactedTargetIds = new Set<string>();
 
@@ -68,8 +91,8 @@ export function getLatestVisibleMessageTimestamp(room: Room): number {
     const content = event.getContent() as RoomMessageContent;
     if (content["m.relates_to"]?.rel_type === "m.replace") continue;
 
-    return event.getTs();
+    return event;
   }
 
-  return room.getLastActiveTimestamp() ?? 0;
+  return null;
 }

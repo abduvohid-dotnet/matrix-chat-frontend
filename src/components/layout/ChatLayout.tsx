@@ -17,13 +17,14 @@ import { EmptyConversation } from "../chat/EmptyConversation";
 import { CallPanel } from "../chat/CallPanel";
 import { ForwardDialog } from "../chat/ForwardDialog";
 import { GroupManagementPanel } from "../chat/GroupManagementPanel";
-import { Phone } from "lucide-react";
+import { ChevronDown, Phone, Plus } from "lucide-react";
 import type { MatrixReplyTarget } from "../../services/matrixReply";
 import {
   readRoomScrollAnchors,
   saveRoomScrollAnchor,
   type RoomScrollAnchor,
 } from "../../services/roomScrollStorage";
+import { isDirectRoom } from "../../services/roomKind";
 
 export function ChatLayout() {
   const { auth, client, logout } = useMatrix();
@@ -37,6 +38,7 @@ export function ChatLayout() {
   const [groupInvitees, setGroupInvitees] = useState("");
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [groupCreateError, setGroupCreateError] = useState<string | null>(null);
+  const [quickCreateOpen, setQuickCreateOpen] = useState(false);
   const [groupManageOpen, setGroupManageOpen] = useState(false);
   const [groupManageBusy, setGroupManageBusy] = useState(false);
   const [groupManageError, setGroupManageError] = useState<string | null>(null);
@@ -55,6 +57,7 @@ export function ChatLayout() {
     () => readRoomScrollAnchors(),
   );
   const lastReadEventIdsRef = useRef<Record<string, string>>({});
+  const quickCreateRef = useRef<HTMLDivElement | null>(null);
   const { messages } = useMatrixTimeline(selectedRoomId);
   const { pinnedEventIds, pinMessage, unpinMessage } = useMatrixPins(selectedRoomId);
   const {
@@ -109,6 +112,10 @@ export function ChatLayout() {
   const isLikelyGroupRoom = useMemo(
     () => Math.max(selectedRoom?.getJoinedMemberCount() ?? 0, groupMembers.length) > 2,
     [groupMembers.length, selectedRoom],
+  );
+  const isDirectSelectedRoom = useMemo(
+    () => (selectedRoom && auth ? isDirectRoom(selectedRoom, auth.userId) : false),
+    [auth, selectedRoom],
   );
   const groupStats = useMemo(
     () => ({
@@ -173,6 +180,21 @@ export function ChatLayout() {
   useEffect(() => {
     setReplyTo(null);
   }, [selectedRoomId]);
+
+  useEffect(() => {
+    if (!quickCreateOpen) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && quickCreateRef.current?.contains(target)) return;
+      setQuickCreateOpen(false);
+    };
+
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [quickCreateOpen]);
 
   useEffect(() => {
     setForwardMessage(null);
@@ -252,6 +274,7 @@ export function ChatLayout() {
       setAutoSelectEnabled(false);
       setGroupName("");
       setGroupInvitees("");
+      setQuickCreateOpen(false);
     } catch (error: unknown) {
       setGroupCreateError(error instanceof Error ? error.message : "Group creation failed");
     } finally {
@@ -381,6 +404,7 @@ export function ChatLayout() {
       setSelectedRoomId(roomId);
       setAutoSelectEnabled(false);
       setTargetUser("");
+      setQuickCreateOpen(false);
     } catch (error: unknown) {
       setDirectError(error instanceof Error ? error.message : "Direct chat ochilmadi");
     } finally {
@@ -398,6 +422,74 @@ export function ChatLayout() {
           <div className="subtitle">Secure direct messaging via Matrix</div>
         </div>
         <div className="topbar-actions">
+          <div ref={quickCreateRef} className="topbar-dropdown">
+            <button
+              type="button"
+              className={`btn ghost topbar-create-btn ${quickCreateOpen ? "active" : ""}`}
+              onClick={() => setQuickCreateOpen((prev) => !prev)}
+            >
+              <Plus size={16} />
+              New chat
+              <ChevronDown size={16} />
+            </button>
+            {quickCreateOpen && (
+              <div className="topbar-create-menu">
+                <div className="direct-create compact topbar-create-panel">
+                  <div className="direct-create-title">Start direct chat</div>
+                  <div className="direct-create-row">
+                    <input
+                      className="input"
+                      value={targetUser}
+                      onChange={(e) => setTargetUser(e.target.value)}
+                      placeholder="@username:uchar.uz yoki username"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void onStartDirect();
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={creatingDirect || !targetUser.trim()}
+                      onClick={() => void onStartDirect()}
+                    >
+                      {creatingDirect ? "Opening..." : "Open"}
+                    </button>
+                  </div>
+                  {directError && <div className="error direct-error">{directError}</div>}
+                </div>
+
+                <div className="topbar-create-divider" />
+
+                <div className="direct-create compact topbar-create-panel">
+                  <div className="direct-create-title">Create group</div>
+                  <input
+                    className="input"
+                    value={groupName}
+                    onChange={(e) => setGroupName(e.target.value)}
+                    placeholder="Group name"
+                  />
+                  <textarea
+                    className="input group-create-textarea compact"
+                    value={groupInvitees}
+                    onChange={(e) => setGroupInvitees(e.target.value)}
+                    placeholder="@user1:server, @user2:server"
+                  />
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={creatingGroup || !groupName.trim()}
+                    onClick={() => void onCreateGroup()}
+                  >
+                    {creatingGroup ? "Creating..." : "Create group"}
+                  </button>
+                  {groupCreateError && <div className="error direct-error">{groupCreateError}</div>}
+                </div>
+              </div>
+            )}
+          </div>
           <div className="account-chip">
             <span className="status-dot" />
             {auth.userId}
@@ -410,56 +502,6 @@ export function ChatLayout() {
 
       <div className="body">
         <div className="sidebar-wrap">
-          <div className="direct-create">
-            <div className="direct-create-title">Start direct chat</div>
-            <div className="direct-create-row">
-              <input
-                className="input"
-                value={targetUser}
-                onChange={(e) => setTargetUser(e.target.value)}
-                placeholder="@username:uchar.uz yoki username"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void onStartDirect();
-                  }
-                }}
-              />
-              <button
-                type="button"
-                className="btn"
-                disabled={creatingDirect || !targetUser.trim()}
-                onClick={() => void onStartDirect()}
-              >
-                {creatingDirect ? "Opening..." : "Open"}
-              </button>
-            </div>
-            {directError && <div className="error direct-error">{directError}</div>}
-          </div>
-          <div className="direct-create">
-            <div className="direct-create-title">Create group</div>
-            <input
-              className="input"
-              value={groupName}
-              onChange={(e) => setGroupName(e.target.value)}
-              placeholder="Group name"
-            />
-            <textarea
-              className="input group-create-textarea"
-              value={groupInvitees}
-              onChange={(e) => setGroupInvitees(e.target.value)}
-              placeholder="@user1:server, @user2:server"
-            />
-            <button
-              type="button"
-              className="btn"
-              disabled={creatingGroup || !groupName.trim()}
-              onClick={() => void onCreateGroup()}
-            >
-              {creatingGroup ? "Creating..." : "Create group"}
-            </button>
-            {groupCreateError && <div className="error direct-error">{groupCreateError}</div>}
-          </div>
           <RoomList
             rooms={rooms}
             selectedRoomId={selectedRoomId}
@@ -549,7 +591,7 @@ export function ChatLayout() {
                             className="btn ghost"
                             onClick={() => setGroupManageOpen((prev) => !prev)}
                           >
-                            {groupManageOpen ? "Close manage" : "Manage group"}
+                            {groupManageOpen ? "Close info" : isDirectSelectedRoom ? "Chat info" : "Manage group"}
                           </button>
                           <button
                             type="button"
@@ -592,6 +634,7 @@ export function ChatLayout() {
               )}
               {groupManageOpen && selectedRoomId && (
                 <GroupManagementPanel
+                  mode={isDirectSelectedRoom ? "direct" : "group"}
                   roomName={groupRoomName || selectedRoom?.name || selectedRoomId}
                   roomId={selectedRoomId}
                   members={groupMembers}

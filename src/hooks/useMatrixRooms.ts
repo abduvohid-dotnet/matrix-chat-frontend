@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ClientEvent, RoomEvent, RoomMemberEvent, UserEvent, type Room } from "matrix-js-sdk";
 import { useMatrix } from "../app/providers/useMatrix";
 import { getLatestVisibleMessageTimestamp } from "../services/roomActivity";
+import { getDirectPeerUserId } from "../services/roomKind";
 
 export function useMatrixRooms() {
   const { client, auth } = useMatrix();
@@ -41,29 +42,8 @@ export function useMatrixRooms() {
     const directRoomByPeer = new Map<string, Room>();
     const nextRooms: Room[] = [];
 
-    const getDirectPeerKey = (room: Room): string | null => {
-      if (room.getMyMembership() !== "join") return null;
-
-      const peers = room
-        .getMembers()
-        .filter(
-          (member) =>
-            member.userId !== auth.userId &&
-            (member.membership === "join" || member.membership === "invite"),
-        );
-
-      if (peers.length !== 1) return null;
-
-      const joinedMembers = room
-        .getMembers()
-        .filter((member) => member.membership === "join" || member.membership === "invite");
-
-      if (joinedMembers.length > 2) return null;
-      return peers[0].userId;
-    };
-
     orderedRooms.forEach((room) => {
-      const directPeerKey = getDirectPeerKey(room);
+      const directPeerKey = getDirectPeerUserId(room, auth.userId);
       if (!directPeerKey) {
         nextRooms.push(room);
         return;
