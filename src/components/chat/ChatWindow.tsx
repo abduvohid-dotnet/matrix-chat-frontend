@@ -537,15 +537,16 @@ export function ChatWindow({
     const visibleCountIncreased = visibleMessages.length > previousVisibleMessageCountRef.current;
     const lastMessageChanged = lastVisibleMessageId !== previousLastVisibleMessageIdRef.current;
     const shouldStickToBottom = isNearBottom(element);
+    const latestMessageIsMine = lastVisibleMessage?.sender === myUserId;
 
-    if ((visibleCountIncreased || lastMessageChanged) && shouldStickToBottom) {
+    if ((visibleCountIncreased || lastMessageChanged) && (shouldStickToBottom || latestMessageIsMine)) {
       element.scrollTop = element.scrollHeight;
     }
 
     previousRoomIdRef.current = roomId;
     previousLastVisibleMessageIdRef.current = lastVisibleMessageId;
     previousVisibleMessageCountRef.current = visibleMessages.length;
-  }, [roomId, visibleMessages]);
+  }, [myUserId, roomId, visibleMessages]);
 
   const selectedMessageIdSet = useMemo(() => new Set(selectedMessageIds), [selectedMessageIds]);
   const pinnedEventIdSet = useMemo(() => new Set(pinnedEventIds), [pinnedEventIds]);
