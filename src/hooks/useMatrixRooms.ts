@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ClientEvent, RoomEvent, RoomMemberEvent, UserEvent, type Room } from "matrix-js-sdk";
 import { useMatrix } from "../app/providers/useMatrix";
+import { getLatestVisibleMessageTimestamp } from "../services/roomActivity";
 
 export function useMatrixRooms() {
   const { client, auth } = useMatrix();
@@ -32,7 +33,7 @@ export function useMatrixRooms() {
 
   const sorted = useMemo(() => {
     const orderedRooms = [...rooms].sort(
-      (a, b) => (b.getLastActiveTimestamp() ?? 0) - (a.getLastActiveTimestamp() ?? 0),
+      (a, b) => getLatestVisibleMessageTimestamp(b) - getLatestVisibleMessageTimestamp(a),
     );
 
     if (!auth) return orderedRooms;

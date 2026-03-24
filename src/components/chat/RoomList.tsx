@@ -2,6 +2,7 @@ import { useEffect, useReducer } from "react";
 import { RoomMemberEvent, UserEvent, type Room } from "matrix-js-sdk";
 import { useMatrix } from "../../app/providers/useMatrix";
 import { formatPresenceStatus, formatTypingSummary } from "../../services/presence";
+import { getLatestVisibleMessageTimestamp } from "../../services/roomActivity";
 
 function formatActivity(ts: number | null): string {
   if (!ts) return "No activity";
@@ -91,7 +92,7 @@ export function RoomList({
                 </div>
                 <div className="room-meta">
                   <span>{r.getJoinedMemberCount()} members</span>
-                  <span>{formatActivity(r.getLastActiveTimestamp())}</span>
+                  <span>{formatActivity(getLatestVisibleMessageTimestamp(r))}</span>
                 </div>
                 <div className="room-presence">
                   <span className={`presence-pill ${status.online ? "online" : "offline"}`}>
