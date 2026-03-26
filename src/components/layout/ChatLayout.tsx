@@ -5,6 +5,7 @@ import { useMatrixTimeline } from "../../hooks/useMatrixTimeline";
 import { useMatrixDirectRoom } from "../../hooks/useMatrixDirectRoom";
 import { useMatrixRoomStatus } from "../../hooks/useMatrixRoomStatus";
 import { useMatrixCall } from "../../hooks/useMatrixCall";
+import { useMatrixGroupVoiceChat } from "../../hooks/useMatrixGroupVoiceChat";
 import { useMatrixForward } from "../../hooks/useMatrixForward";
 import { useMatrixMessageActions } from "../../hooks/useMatrixMessageActions";
 import { useMatrixPins } from "../../hooks/useMatrixPins";
@@ -17,7 +18,7 @@ import { EmptyConversation } from "../chat/EmptyConversation";
 import { CallPanel } from "../chat/CallPanel";
 import { ForwardDialog } from "../chat/ForwardDialog";
 import { GroupManagementPanel } from "../chat/GroupManagementPanel";
-import { ChevronDown, Phone, Plus } from "lucide-react";
+import { ChevronDown, Phone, Plus, Video } from "lucide-react";
 import type { MatrixReplyTarget } from "../../services/matrixReply";
 import {
   readRoomScrollAnchors,
@@ -77,6 +78,7 @@ export function ChatLayout() {
   const { forwardMessage: sendForward, forwardMessages: sendForwardMany } = useMatrixForward();
   const { deleteMessages } = useMatrixMessageActions();
   const matrixCall = useMatrixCall();
+  const groupVoiceChat = useMatrixGroupVoiceChat(selectedRoomId);
   const selectedRoom = rooms.find((room) => room.roomId === selectedRoomId) ?? null;
   const selectedMessages = useMemo(
     () => messages.filter((message) => selectedMessageIds.includes(message.id)),
@@ -113,6 +115,7 @@ export function ChatLayout() {
     () => Math.max(selectedRoom?.getJoinedMemberCount() ?? 0, groupMembers.length) > 2,
     [groupMembers.length, selectedRoom],
   );
+  const canManageGroupVoice = isLikelyGroupRoom && groupVoiceChat.canManage;
   const isDirectSelectedRoom = useMemo(
     () => (selectedRoom && auth ? isDirectRoom(selectedRoom, auth.userId) : false),
     [auth, selectedRoom],
@@ -593,14 +596,71 @@ export function ChatLayout() {
                           >
                             {groupManageOpen ? "Close info" : isDirectSelectedRoom ? "Chat info" : "Manage group"}
                           </button>
-                          <button
-                            type="button"
-                            className="btn ghost call-trigger-btn"
-                            onClick={() => void matrixCall.startVoiceCall(selectedRoomId)}
-                          >
-                            <Phone size={16} />
-                            Voice
-                          </button>
+                          {isDirectSelectedRoom ? (
+                            <>
+                              <button
+                                type="button"
+                                className="btn ghost call-trigger-btn"
+                                onClick={() => void matrixCall.startVoiceCall(selectedRoomId)}
+                              >
+                                <Phone size={16} />
+                                Voice
+                              </button>
+                              <button
+                                type="button"
+                                className="btn ghost call-trigger-btn"
+                                onClick={() => void matrixCall.startVideoCall(selectedRoomId)}
+                              >
+                                <Video size={16} />
+                                Video
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              {!groupVoiceChat.active && canManageGroupVoice && (
+                                <button
+                                  type="button"
+                                  className="btn ghost call-trigger-btn"
+                                  onClick={() => void groupVoiceChat.start(selectedRoomId)}
+                                >
+                                  <Phone size={16} />
+                                  Start voice chat
+                                </button>
+                              )}
+                              {groupVoiceChat.active &&
+                                !groupVoiceChat.joined &&
+                                groupVoiceChat.startedBy !== auth?.userId && (
+                                <button
+                                  type="button"
+                                  className="btn ghost call-trigger-btn"
+                                  onClick={() => void groupVoiceChat.join()}
+                                >
+                                  <Phone size={16} />
+                                  Join voice chat
+                                </button>
+                              )}
+                              {groupVoiceChat.active && groupVoiceChat.joined && (
+                                <button
+                                  type="button"
+                                  className="btn ghost call-trigger-btn"
+                                  onClick={groupVoiceChat.leave}
+                                >
+                                  <Phone size={16} />
+                                  Leave voice chat
+                                </button>
+                              )}
+                              {groupVoiceChat.active && canManageGroupVoice && (
+                                <button
+                                  type="button"
+                                  className="btn ghost call-trigger-btn"
+                                  onClick={() => void groupVoiceChat.end()}
+                                >
+                                  <Phone size={16} />
+                                  End voice chat
+                                </button>
+                              )}
+                            </>
+                          )}
                         </>
                       )}
                     </>
@@ -620,16 +680,19 @@ export function ChatLayout() {
               </div>
               {matrixCall.inCall && matrixCall.roomId === selectedRoomId && (
                 <CallPanel
+                  type={matrixCall.type}
                   localStream={matrixCall.localStream}
                   remoteStream={matrixCall.remoteStream}
                   state={matrixCall.state}
                   incoming={matrixCall.incoming}
                   micMuted={matrixCall.micMuted}
+                  cameraMuted={matrixCall.cameraMuted}
                   error={matrixCall.error}
                   onAnswer={() => void matrixCall.answer()}
                   onReject={matrixCall.reject}
                   onHangup={matrixCall.hangup}
                   onToggleMicrophone={() => void matrixCall.toggleMicrophone()}
+                  onToggleCamera={() => void matrixCall.toggleCamera()}
                 />
               )}
               {groupManageOpen && selectedRoomId && (

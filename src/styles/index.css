@@ -724,6 +724,74 @@ body {
   background: #fff1f5;
 }
 
+.group-voice-panel {
+  border-bottom: 1px solid #e7eef3;
+  background: linear-gradient(180deg, #f9fcff 0%, #eef5ff 100%);
+  padding: 12px 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.group-voice-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.group-voice-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, #eaf4ff 0%, #d9eaff 100%);
+  color: #1d5fba;
+  border: 1px solid #c7daf2;
+  flex: 0 0 auto;
+}
+
+.group-voice-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.group-voice-title {
+  font-size: 15px;
+  font-weight: 800;
+  color: #173143;
+}
+
+.group-voice-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  font-weight: 700;
+  color: #6b8398;
+}
+
+.group-voice-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #9bb0c3;
+}
+
+.group-voice-error {
+  font-size: 12px;
+  font-weight: 700;
+  color: #9f1239;
+}
+
+.group-voice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .group-panel-backdrop {
   position: absolute;
   inset: 0;
@@ -1218,6 +1286,17 @@ body {
   border: none;
 }
 
+.msg.system-room-notice {
+  margin-left: auto;
+  margin-right: auto;
+  min-width: min(320px, 100%);
+  max-width: min(420px, 92%);
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+
 .call-notice-card {
   display: flex;
   align-items: center;
@@ -1295,6 +1374,71 @@ body {
 
 .call-notice-separator {
   color: #9aaaba;
+}
+
+.room-notice-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid #d8e4f2;
+  background: linear-gradient(180deg, #fbfdff 0%, #f1f6fc 100%);
+  box-shadow: 0 10px 24px rgba(19, 36, 57, 0.06);
+}
+
+.room-notice-card.started {
+  border-color: #cce2f7;
+  background: linear-gradient(180deg, #f8fbff 0%, #edf5ff 100%);
+}
+
+.room-notice-card.ended {
+  border-color: #d7e3ed;
+  background: linear-gradient(180deg, #fbfdff 0%, #f4f8fb 100%);
+}
+
+.room-notice-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #edf4fb;
+  color: #3d6587;
+  flex: 0 0 auto;
+}
+
+.room-notice-card.started .room-notice-icon {
+  background: #e7f1ff;
+  color: #1d5fba;
+}
+
+.room-notice-card.ended .room-notice-icon {
+  background: #eef3f8;
+  color: #546c7d;
+}
+
+.room-notice-content {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.room-notice-title {
+  font-size: 14px;
+  font-weight: 800;
+  color: #193447;
+}
+
+.room-notice-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  font-weight: 700;
+  color: #718497;
 }
 
 .msg.selecting {

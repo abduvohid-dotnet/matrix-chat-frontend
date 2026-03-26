@@ -14,6 +14,7 @@ type UseMatrixCallState = {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
   micMuted: boolean;
+  cameraMuted: boolean;
   error: string | null;
 };
 
@@ -26,6 +27,7 @@ const INITIAL_STATE: UseMatrixCallState = {
   localStream: null,
   remoteStream: null,
   micMuted: false,
+  cameraMuted: true,
   error: null,
 };
 
@@ -98,6 +100,10 @@ function formatCallDuration(durationMs: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function getCallNoticeLabel(type: CallType | null): string {
+  return type === CallType.Video ? "Video qo'ng'iroq" : "Audio qo'ng'iroq";
 }
 
 export function useMatrixCall() {
@@ -176,7 +182,10 @@ export function useMatrixCall() {
       }
 
       session.endedLogged = true;
-      void sendCallNotice(call.roomId, `Audio qo'ng'iroq tugadi. Davomiyligi: ${formatCallDuration(Date.now() - session.connectedAt)}`);
+      void sendCallNotice(
+        call.roomId,
+        `${getCallNoticeLabel(call.type)} tugadi. Davomiyligi: ${formatCallDuration(Date.now() - session.connectedAt)}`,
+      );
     },
     [sendCallNotice],
   );
@@ -211,6 +220,7 @@ export function useMatrixCall() {
       localStream: call.localUsermediaStream ?? null,
       remoteStream: call.remoteUsermediaStream ?? null,
       micMuted: call.isMicrophoneMuted(),
+      cameraMuted: call.isLocalVideoMuted(),
       error: error ?? null,
     });
   }, []);
@@ -234,6 +244,7 @@ export function useMatrixCall() {
       localStream: null,
       remoteStream: null,
       micMuted: false,
+      cameraMuted: true,
       error: error ?? prev.error ?? null,
     }));
   }, []);
@@ -297,6 +308,7 @@ export function useMatrixCall() {
       localStream: null,
       remoteStream: null,
       micMuted: false,
+      cameraMuted: true,
       error: prev.error ?? lastErrorRef.current ?? "Call sessionni tiklash kutilmoqda",
     }));
   }, []);
@@ -487,13 +499,35 @@ export function useMatrixCall() {
     [attachCall, client, showCallPlaceholder],
   );
 
+  const startVideoCall = useCallback(
+    async (roomId: string) => {
+      if (!client || !roomId) return;
+
+      void audioRef.current?.unlock();
+      const call = client.createCall(roomId);
+      if (!call) {
+        setCallState((prev) => ({ ...prev, error: "Browser call support mavjud emas" }));
+        return;
+      }
+
+      attachCall(call, false);
+      try {
+        await call.placeVideoCall();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Video call boshlanmadi";
+        showCallPlaceholder({ roomId, type: CallType.Video, incoming: false }, CallState.Ended, message);
+      }
+    },
+    [attachCall, client, showCallPlaceholder],
+  );
+
   const answer = useCallback(async () => {
     const call = activeCallRef.current;
     if (!call) return;
     void audioRef.current?.unlock();
-    await call.answer(true, false);
-    syncFromCall(call, false, null);
-  }, [syncFromCall]);
+    await call.answer(true, call.type === CallType.Video);
+    syncFromCall(call, callState.incoming, null);
+  }, [callState.incoming, syncFromCall]);
 
   const reject = useCallback(() => {
     const call = activeCallRef.current;
@@ -523,13 +557,22 @@ export function useMatrixCall() {
     syncFromCall(call, callState.incoming, callState.error);
   }, [callState.error, callState.incoming, syncFromCall]);
 
+  const toggleCamera = useCallback(async () => {
+    const call = activeCallRef.current;
+    if (!call || call.type !== CallType.Video) return;
+    await call.setLocalVideoMuted(!call.isLocalVideoMuted());
+    syncFromCall(call, callState.incoming, callState.error);
+  }, [callState.error, callState.incoming, syncFromCall]);
+
   return {
     ...callState,
     startVoiceCall,
+    startVideoCall,
     answer,
     reject,
     hangup,
     toggleMicrophone,
+    toggleCamera,
     inCall: Boolean(callState.call || callState.roomId),
   };
 }

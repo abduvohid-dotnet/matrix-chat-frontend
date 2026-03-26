@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { MsgType, RoomEvent } from "matrix-js-sdk";
-import { AudioLines, CheckCheck, Clock3, Download, FileText, Pause, Play, PhoneCall, PhoneMissed } from "lucide-react";
+import { AudioLines, CheckCheck, Clock3, Download, FileText, Pause, Play, PhoneCall, PhoneMissed, Radio } from "lucide-react";
 import type { UiMessage } from "../../hooks/useMatrixTimeline";
 import { useMatrix } from "../../app/providers/useMatrix";
 import { useMatrixMessageActions } from "../../hooks/useMatrixMessageActions";
@@ -212,11 +212,11 @@ function getCallNoticeMeta(message: UiMessage): CallNoticeMeta | null {
     return { kind: "rejected", title: "Rejected Call", detail: null };
   }
 
-  if (text === "Audio qo'ng'iroq boshlandi") {
+  if (text === "Audio qo'ng'iroq boshlandi" || text === "Video qo'ng'iroq boshlandi") {
     return { kind: "started", title: "Call Started", detail: null };
   }
 
-  if (text.startsWith("Audio qo'ng'iroq tugadi.")) {
+  if (text.startsWith("Audio qo'ng'iroq tugadi.") || text.startsWith("Video qo'ng'iroq tugadi.")) {
     const durationMatch = text.match(/Davomiyligi:\s*(.+)$/i);
     return {
       kind: "ended",
@@ -232,6 +232,38 @@ function renderCallNoticeIcon(kind: CallNoticeKind) {
   if (kind === "rejected") return <PhoneMissed size={18} />;
   if (kind === "ended") return <Clock3 size={18} />;
   return <PhoneCall size={18} />;
+}
+
+type GroupVoiceNoticeKind = "started" | "ended";
+
+type GroupVoiceNoticeMeta = {
+  kind: GroupVoiceNoticeKind;
+  title: string;
+  detail: string | null;
+};
+
+function getGroupVoiceNoticeMeta(message: UiMessage): GroupVoiceNoticeMeta | null {
+  if (message.msgtype !== MsgType.Notice) return null;
+
+  const text = message.text.trim();
+  if (text === "Guruh ovozli chati boshlandi") {
+    return {
+      kind: "started",
+      title: "Group voice chat started",
+      detail: null,
+    };
+  }
+
+  if (text.startsWith("Guruh ovozli chati yakunlandi")) {
+    const durationMatch = text.match(/Davomiyligi:\s*(.+)$/i);
+    return {
+      kind: "ended",
+      title: "Group voice chat ended",
+      detail: durationMatch?.[1] ?? null,
+    };
+  }
+
+  return null;
 }
 
 export function ChatWindow({
@@ -749,7 +781,9 @@ export function ChatWindow({
           const isSelected = selectedMessageIdSet.has(message.id);
           const isPinned = Boolean(message.eventId && pinnedEventIdSet.has(message.eventId));
           const callNotice = getCallNoticeMeta(message);
-          const shouldRenderTextBody = !callNotice && kind === "text";
+          const groupVoiceNotice = getGroupVoiceNoticeMeta(message);
+          const isCenteredSystemNotice = Boolean(groupVoiceNotice);
+          const shouldRenderTextBody = !callNotice && !groupVoiceNotice && kind === "text";
 
           return (
             <div
@@ -768,7 +802,7 @@ export function ChatWindow({
                   messageRefs.current.delete(message.eventId);
                 }
               }}
-              className={`msg ${message.sender === myUserId ? "me" : ""} ${callNotice ? "system-call" : ""} ${selectionMode ? "selecting" : ""} ${isSelected ? "selected" : ""} ${message.eventId === highlightedEventId ? "jump-highlight" : ""}`}
+              className={`msg ${message.sender === myUserId && !isCenteredSystemNotice ? "me" : ""} ${callNotice ? "system-call" : ""} ${groupVoiceNotice ? "system-room-notice" : ""} ${selectionMode ? "selecting" : ""} ${isSelected ? "selected" : ""} ${message.eventId === highlightedEventId ? "jump-highlight" : ""}`}
               data-event-id={message.eventId ?? undefined}
               onContextMenu={(event) => {
                 if (selectionMode) return;
@@ -799,6 +833,20 @@ export function ChatWindow({
                     <div className="call-notice-meta">
                       {callNotice.detail && <span>{callNotice.detail}</span>}
                       {callNotice.detail && <span className="call-notice-separator">•</span>}
+                      <span>{formatMessageTime(message.ts)}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : groupVoiceNotice ? (
+                <div className={`room-notice-card ${groupVoiceNotice.kind}`}>
+                  <div className="room-notice-icon">
+                    {groupVoiceNotice.kind === "ended" ? <Clock3 size={18} /> : <Radio size={18} />}
+                  </div>
+                  <div className="room-notice-content">
+                    <div className="room-notice-title">{groupVoiceNotice.title}</div>
+                    <div className="room-notice-meta">
+                      {groupVoiceNotice.detail && <span>{groupVoiceNotice.detail}</span>}
+                      {groupVoiceNotice.detail && <span className="call-notice-separator">•</span>}
                       <span>{formatMessageTime(message.ts)}</span>
                     </div>
                   </div>

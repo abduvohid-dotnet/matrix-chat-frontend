@@ -14,6 +14,10 @@ type RoomPowerLevelsContent = {
   events?: Record<string, number>;
 };
 
+const GROUP_CALL_EVENT_TYPE = EventType.GroupCallPrefix;
+const GROUP_CALL_MEMBER_EVENT_TYPE = EventType.GroupCallMemberPrefix;
+const GROUP_VOICE_CHAT_STATE_EVENT_TYPE = "com.uzinfocom.group_voice_chat";
+
 export type GroupMemberSummary = {
   userId: string;
   displayName: string;
@@ -60,6 +64,12 @@ function getPowerLevelsState(room: Room | null): RoomPowerLevelsContent {
     | RoomPowerLevelsContent
     | undefined;
 
+  const defaultEvents = {
+    [GROUP_CALL_EVENT_TYPE]: 100,
+    [GROUP_CALL_MEMBER_EVENT_TYPE]: 0,
+    [GROUP_VOICE_CHAT_STATE_EVENT_TYPE]: 100,
+  };
+
   return {
     users_default: 0,
     events_default: 0,
@@ -69,8 +79,11 @@ function getPowerLevelsState(room: Room | null): RoomPowerLevelsContent {
     kick: 75,
     ban: 75,
     users: {},
-    events: {},
     ...content,
+    events: {
+      ...defaultEvents,
+      ...(content?.events ?? {}),
+    },
   };
 }
 
@@ -247,6 +260,11 @@ export function useMatrixGroups(roomId: string | null) {
           redact: 50,
           kick: 75,
           ban: 75,
+          events: {
+            [GROUP_CALL_EVENT_TYPE]: 100,
+            [GROUP_CALL_MEMBER_EVENT_TYPE]: 0,
+            [GROUP_VOICE_CHAT_STATE_EVENT_TYPE]: 100,
+          },
         },
       });
 
